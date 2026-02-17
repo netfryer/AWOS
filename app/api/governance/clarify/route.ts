@@ -1,0 +1,34 @@
+import { NextRequest, NextResponse } from "next/server";
+import { runExecutiveCouncil } from "../../../../dist/src/governance/executiveCouncil.js";
+import { getModelRegistryForRuntime } from "../../../../dist/src/lib/model-hr/index.js";
+import type { CeoDirectiveRequest } from "../../../../dist/src/governance/types.js";
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = (await request.json()) as CeoDirectiveRequest;
+    if (!body.directive?.trim()) {
+      return NextResponse.json(
+        { error: "Missing required field: directive" },
+        { status: 400 }
+      );
+    }
+
+    const { models: modelRegistry } = await getModelRegistryForRuntime();
+    const result = await runExecutiveCouncil(
+      body,
+      modelRegistry,
+      "./runs/governance.jsonl"
+    );
+
+    return NextResponse.json({
+      run: result.run,
+      brief: result.brief,
+      gate: result.gate,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Internal server error" },
+      { status: 500 }
+    );
+  }
+}

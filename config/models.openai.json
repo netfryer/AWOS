@@ -1,0 +1,39 @@
+{
+  "provider": "openai",
+  "models": [
+    {
+      "modelId": "gpt-4o",
+      "displayName": "GPT-4o",
+      "pricing": {
+        "inPer1k": 0.0025,
+        "outPer1k": 0.01,
+        "currency": "USD"
+      },
+      "allowedTiers": ["cheap", "standard", "premium"],
+      "expertise": {
+        "code": 0.92,
+        "writing": 0.88,
+        "analysis": 0.9,
+        "general": 0.9
+      },
+      "reliability": 0.98
+    },
+    {
+      "modelId": "gpt-4o-mini",
+      "displayName": "GPT-4o Mini",
+      "pricing": {
+        "inPer1k": 0.00015,
+        "outPer1k": 0.0006,
+        "currency": "USD"
+      },
+      "allowedTiers": ["cheap", "standard", "premium"],
+      "expertise": {
+        "code": 0.78,
+        "writing": 0.75,
+        "analysis": 0.76,
+        "general": 0.77
+      },
+      "reliability": 0.97
+    }
+  ]
+}

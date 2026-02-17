@@ -1,0 +1,56 @@
+{
+  "provider": "anthropic",
+  "models": [
+    {
+      "modelId": "claude-sonnet-4-5-20250929",
+      "displayName": "Claude Sonnet",
+      "pricing": {
+        "inPer1k": 0.003,
+        "outPer1k": 0.015,
+        "currency": "USD"
+      },
+      "allowedTiers": ["standard", "premium"],
+      "expertise": {
+        "code": 0.85,
+        "writing": 0.9,
+        "analysis": 0.88,
+        "general": 0.86
+      },
+      "reliability": 0.96
+    },
+    {
+      "modelId": "claude-haiku-4-5-20251001",
+      "displayName": "Claude Haiku",
+      "pricing": {
+        "inPer1k": 0.00025,
+        "outPer1k": 0.00125,
+        "currency": "USD"
+      },
+      "allowedTiers": ["cheap", "standard", "premium"],
+      "expertise": {
+        "code": 0.72,
+        "writing": 0.74,
+        "analysis": 0.71,
+        "general": 0.73
+      },
+      "reliability": 0.95
+    },
+    {
+      "modelId": "claude-3-haiku-20240307",
+      "displayName": "Claude Haiku 3",
+      "pricing": {
+        "inPer1k": 0.00025,
+        "outPer1k": 0.00125,
+        "currency": "USD"
+      },
+      "allowedTiers": ["cheap", "standard", "premium"],
+      "expertise": {
+        "code": 0.65,
+        "writing": 0.72,
+        "analysis": 0.68,
+        "general": 0.7
+      },
+      "reliability": 0.95
+    }
+  ]
+}
