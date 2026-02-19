@@ -11,6 +11,7 @@ import { join } from "path";
 import type { ProjectPlan, WorkPackage } from "../schemas/governance.js";
 import {
   getAcceptanceCriteria,
+  getAcceptanceCriteriaForPackage,
   type TaskType,
   type Difficulty,
 } from "./directorCriteria.js";
@@ -45,6 +46,10 @@ export interface AtomicWorkPackage {
   taskType?: TaskType;
   difficulty?: Difficulty;
   qaPolicy?: QaPolicy;
+  /** Override tier for routing (e.g. strategy→premium, workers→cheap). */
+  tierProfileOverride?: "cheap" | "standard" | "premium";
+  /** Override cheapestViableChosen for this package (e.g. workers→true). */
+  cheapestViableChosen?: boolean;
 }
 
 /** QA package output contract */
@@ -212,7 +217,7 @@ export function packageWork(
       role: "Worker",
       name: wp.name,
       description: wp.description,
-      acceptanceCriteria: getAcceptanceCriteria(taskType, difficulty),
+      acceptanceCriteria: getAcceptanceCriteriaForPackage(wp.id, taskType, difficulty),
       inputs: workerInputs,
       outputs: workerOutputs,
       dependencies: wp.dependencies ?? [],

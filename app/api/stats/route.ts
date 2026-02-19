@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getModelStatsTracker } from "../../../dist/src/modelStats.js";
+import { getModelStatsTracker } from "../../../src/modelStats";
 
 export async function GET() {
   try {

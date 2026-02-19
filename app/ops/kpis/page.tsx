@@ -268,7 +268,7 @@ export default function OpsKpisPage() {
         </div>
       ) : kpis ? (
         <>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(140px, 1fr))", gap: 16 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 16 }}>
             <Card title="Total USD" value={`$${kpis.totals.totalUSD.toFixed(2)}`} sub={`${kpis.window} runs`} />
             <Card title="Avg $/Run" value={`$${kpis.averages.totalUSDPerRun.toFixed(2)}`} />
             <Card title="Packages" value={kpis.totals.packagesTotal} />

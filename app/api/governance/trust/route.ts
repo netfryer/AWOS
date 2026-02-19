@@ -1,7 +1,7 @@
 // ─── src/app/api/governance/trust/route.ts ──────────────────────────────────
 
 import { NextResponse } from "next/server";
-import { getTrustTracker } from "../../../../dist/src/lib/governance/trustTracker.js";
+import { getTrustTracker } from "../../../../src/lib/governance/trustTracker";
 
 function err500(code: string, message: string, details?: unknown) {
   return NextResponse.json(

@@ -17,6 +17,7 @@ import type { ModelSpec, TaskCard, TaskType, Difficulty } from "../../types.js";
 import type { TrustTracker } from "../governance/trustTracker.js";
 import type { LlmTextExecuteResult } from "../llm/llmTextExecute.js";
 import { InMemoryArtifactRegistry } from "./artifactRegistry.js";
+import { runOutputValidator } from "./outputValidators.js";
 import { isAllowedCommand } from "./qaAllowlist.js";
 import type { RunLedgerStore } from "../observability/runLedger.js";
 import type { PortfolioRecommendation } from "../governance/portfolioOptimizer.js";
@@ -134,6 +135,35 @@ export interface RunPackagesResult {
 
 const ESCALATION_SPEND_CAP_PCT = 0.1;
 const ROUTING_CANDIDATES_CAP = 20;
+
+/**
+ * Build directive proxy for token estimation only.
+ * Concatenates name, description, acceptance criteria, and inputs (e.g. directive, deliverables)
+ * to approximate Worker prompt size. NOT used for the actual worker prompt.
+ */
+function buildWorkerDirectiveForTokenEstimate(pkg: {
+  name: string;
+  description?: string;
+  acceptanceCriteria: string[];
+  inputs?: Record<string, unknown>;
+}): string {
+  const parts: string[] = [`Task: ${pkg.name}`];
+  if (pkg.description) parts.push(`Description: ${pkg.description}`);
+  const criteria = (pkg.acceptanceCriteria ?? []).map((c, i) => `${i + 1}. ${c}`).join("\n");
+  if (criteria) parts.push(`Acceptance criteria:\n${criteria}`);
+  const inputs = pkg.inputs;
+  if (inputs && typeof inputs === "object") {
+    const directive = inputs.directive;
+    const taskDesc = inputs.taskDescription;
+    const deliverables = inputs.deliverables;
+    if (typeof directive === "string") parts.push(`Directive: ${directive}`);
+    if (typeof taskDesc === "string") parts.push(`Task: ${taskDesc}`);
+    if (Array.isArray(deliverables)) {
+      parts.push(`Deliverables: ${deliverables.map((d) => (typeof d === "string" ? d : JSON.stringify(d))).join(", ")}`);
+    }
+  }
+  return parts.join("\n");
+}
 const DEFAULT_WORKER_CONCURRENCY = 3;
 const DEFAULT_QA_CONCURRENCY = 1;
 const WORKER_QA_LEAD_LIMIT = 2;
@@ -1041,6 +1071,8 @@ export async function runWorkPackages(
   }
 
   while (readyWorkers.length > 0 || readyQA.length > 0) {
+    const workerTierForResolve =
+      readyWorkers.some((p) => p.tierProfileOverride != null) ? "standard" : currentTier;
     const {
       models: modelsByTier,
       registryEntries: workerRegistryEntries,
@@ -1048,7 +1080,7 @@ export async function runWorkPackages(
       procurementFallback: modelsProcurementFallback,
       procurementFiltered: workerProcurementFiltered,
     } = await resolveModelsForRouting(
-      currentTier,
+      workerTierForResolve,
       remainingUSD,
       "general",
       "low",
@@ -1060,7 +1092,9 @@ export async function runWorkPackages(
 
     const workerLead = workerCompletedCount - qaCompletedCount;
     const qaBacklogExists = readyQA.length > 0;
-    const canRunWorkers = workerLead < WORKER_QA_LEAD_LIMIT;
+    const canRunWorkers =
+      workerLead < WORKER_QA_LEAD_LIMIT ||
+      !qaBacklogExists; /* allow workers when no QA is waiting (e.g. aggregation before qa-review) */
 
     if (readyQA.length > 0 && remainingUSD > 0) {
       readyQA.sort((a, b) => {
@@ -1108,6 +1142,9 @@ export async function runWorkPackages(
 
         const importance = workerPkg?.importance ?? 3;
         const qaChecks = workerPkg?.qaChecks?.filter((c): c is QaCheckShell => c.type === "shell");
+        const fullWorkerOutput =
+          (registry.getArtifactByPackageId(workerId)?.content as string | undefined) ?? "";
+        const outputValidation = runOutputValidator(workerId, fullWorkerOutput);
 
         let qaParsed: { pass: boolean; qualityScore: number; defects: string[]; allChecksSkipped?: boolean };
         let qaCostUSD = 0;
@@ -1122,6 +1159,14 @@ export async function runWorkPackages(
 
         if (qaChecks && qaChecks.length > 0) {
           qaParsed = await runDeterministicQaChecks(qaChecks, cwd);
+          if (outputValidation && !outputValidation.pass) {
+            qaParsed = {
+              pass: false,
+              qualityScore: 0.3,
+              defects: [...qaParsed.defects, ...outputValidation.defects],
+              allChecksSkipped: qaParsed.allChecksSkipped,
+            };
+          }
           deterministicRan = true;
           deterministicNoSignalForOutcome = qaParsed.allChecksSkipped === true;
           const deterministicPass = qaParsed.pass;
@@ -1339,6 +1384,16 @@ Respond with ONLY a JSON object (no markdown, no extra text):
           deterministicPassForOutcome = ranLlmQa ? deterministicPass : undefined;
           qaModeForOutcome = ranLlmQa ? "hybrid" : "deterministic";
         } else {
+          if (outputValidation && !outputValidation.pass) {
+            qaParsed = {
+              pass: false,
+              qualityScore: 0.3,
+              defects: outputValidation.defects,
+            };
+            deterministicRan = true;
+            deterministicPassForOutcome = false;
+            qaModeForOutcome = "deterministic";
+          } else {
           const task: TaskCard = {
             id: pkg.id,
             taskType: "analysis",
@@ -1491,6 +1546,7 @@ Respond with ONLY a JSON object (no markdown, no extra text):
           } catch (e) {
             return { outcome: null, warning: `QA ${pkg.id} invalid JSON: ${e instanceof Error ? e.message : String(e)}` };
           }
+          }
         }
 
         const outcome: QATaskOutcome = {
@@ -1546,7 +1602,7 @@ Respond with ONLY a JSON object (no markdown, no extra text):
           (portfolioMode === "prefer" || portfolioMode === "lock") && ctx.portfolio
             ? getPortfolioOptionsForWorker(ctx.portfolio, taskType, portfolioMode)
             : undefined;
-        const routing = ctx.route(task, modelsByTier, undefined, pkg.description ?? pkg.name, workerPortfolioOpts);
+        const routing = ctx.route(task, modelsByTier, undefined, buildWorkerDirectiveForTokenEstimate(pkg), workerPortfolioOpts);
         const modelId = routing.chosenModelId;
         if (!modelId) continue;
         const model = modelsByTier.find((m) => m.id === modelId);
@@ -1568,7 +1624,7 @@ Respond with ONLY a JSON object (no markdown, no extra text):
             (portfolioMode === "prefer" || portfolioMode === "lock") && ctx.portfolio
               ? getPortfolioOptionsForWorker(ctx.portfolio, taskType, portfolioMode)
               : undefined;
-          const routing = ctx.route(task, modelsByTier, undefined, pkg.description ?? pkg.name, workerPortfolioOpts);
+          const routing = ctx.route(task, modelsByTier, undefined, buildWorkerDirectiveForTokenEstimate(pkg), workerPortfolioOpts);
           const modelId = routing.chosenModelId;
           if (!modelId) continue;
           const model = modelsByTier.find((m) => m.id === modelId);
@@ -1601,6 +1657,8 @@ Respond with ONLY a JSON object (no markdown, no extra text):
           (portfolioMode === "prefer" || portfolioMode === "lock") && ctx.portfolio
             ? getPortfolioOptionsForWorker(ctx.portfolio, taskType, portfolioMode)
             : undefined;
+        const effectiveTier = pkg.tierProfileOverride ?? currentTier;
+        const useCheapestViable = pkg.cheapestViableChosen ?? enforceCheapestViable ?? false;
         const workerRoutingOptions =
           workerRegistryEntries && workerRegistryEntries.length > 0
             ? await (async () => {
@@ -1608,13 +1666,13 @@ Respond with ONLY a JSON object (no markdown, no extra text):
                   workerRegistryEntries,
                   taskType,
                   difficulty,
-                  currentTier,
+                  effectiveTier,
                   remainingUSD
                 );
                 return {
                   candidateScores: scores,
                   candidateScoreBreakdowns: breakdowns,
-                  cheapestViableChosen: enforceCheapestViable ?? false,
+                  cheapestViableChosen: useCheapestViable,
                 };
               })()
             : undefined;
@@ -1622,7 +1680,7 @@ Respond with ONLY a JSON object (no markdown, no extra text):
           task,
           modelsByTier,
           undefined,
-          pkg.description ?? pkg.name,
+          buildWorkerDirectiveForTokenEstimate(pkg),
           workerPortfolioOpts,
           workerRoutingOptions
         );
@@ -1641,7 +1699,7 @@ Respond with ONLY a JSON object (no markdown, no extra text):
             workerEstTokens,
             taskType,
             difficulty,
-            currentTier
+            effectiveTier
           );
           const rawCandidates = candidates ? candidates.slice(0, ROUTING_CANDIDATES_CAP) : [];
           const allCandidates = [...procurementCandidates, ...rawCandidates].slice(0, ROUTING_CANDIDATES_CAP);
@@ -1657,7 +1715,7 @@ Respond with ONLY a JSON object (no markdown, no extra text):
               workerEstTokens,
               taskType,
               difficulty,
-              currentTier
+              effectiveTier
             );
           const chosenCandidate = routingCandidates.find((c) => c.modelId === modelId);
           ctx.ledger.recordDecision(ctx.runSessionId, {
@@ -1666,7 +1724,7 @@ Respond with ONLY a JSON object (no markdown, no extra text):
             details: {
               taskType,
               difficulty,
-              tierProfile: currentTier,
+              tierProfile: effectiveTier,
               chosenModelId: modelId,
               trustUsed: ctx.trustTracker.getTrust(modelId, "worker"),
               budgetRemaining: remainingUSD,
@@ -1706,11 +1764,22 @@ Respond with ONLY a JSON object (no markdown, no extra text):
         }
         const predictedQuality = Math.max(0, Math.min(1, basePred));
         const acceptanceBlock = pkg.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n");
+        const aggregationReportConstraints =
+          pkg.id === "aggregation-report"
+            ? `
+
+CRITICAL: Do NOT invent sample data or placeholder datasets unless input data is explicitly provided.
+- Define the input CSV interface (columns, format).
+- Describe the aggregation algorithm.
+- Output a JSON report schema and minimal runnable Node/TS implementation (this repo is TypeScript).
+- Include a JSON object with required keys: "summary" and "aggregations". You may add an optional example section clearly labeled as example only.`
+            : "";
         const prompt = `Task: ${pkg.name}
 ${pkg.description ? `Description: ${pkg.description}` : ""}
 
 Acceptance criteria:
 ${acceptanceBlock}
+${aggregationReportConstraints}
 
 Produce your output artifact (text or JSON as appropriate). At the very end, append a single JSON line: {"selfConfidence":<0-1>}`;
 

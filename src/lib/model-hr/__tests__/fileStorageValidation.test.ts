@@ -3,8 +3,8 @@
  * invalid entries are skipped, malformed JSON returns [].
  */
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdir, writeFile, rm } from "fs/promises";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { mkdir, writeFile, rm, readFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
 import { FileStorageAdapter } from "../registry/storage/fileStorage.js";
@@ -80,7 +80,7 @@ describe("FileStorageAdapter validation", () => {
   });
 
   it("saveModel does not write invalid entry", async () => {
-    const storage = new FileStorageAdapter(testDir);
+    const modelsPath = join(testDir, "models.json");
     const invalid = {
       id: "bad",
       identity: { provider: "", modelId: "x", status: "active" },
@@ -88,9 +88,41 @@ describe("FileStorageAdapter validation", () => {
       createdAtISO: "x",
       updatedAtISO: "x",
     } as unknown as ModelRegistryEntry;
-    await storage.saveModel(invalid);
-    const models = await storage.loadModels();
-    expect(models).toEqual([]);
+    const valid: ModelRegistryEntry = {
+      id: "openai/gpt-4o",
+      identity: { provider: "openai", modelId: "gpt-4o", status: "active" },
+      pricing: { inPer1k: 0.0025, outPer1k: 0.01, currency: "USD" },
+      createdAtISO: "2025-01-01T00:00:00.000Z",
+      updatedAtISO: "2025-01-01T00:00:00.000Z",
+    };
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const storage = new FileStorageAdapter(testDir);
+
+      // Case 1: No pre-existing file. saveModel(invalid) must not create models.json with invalid.
+      await storage.saveModel(invalid);
+      let models = await storage.loadModels();
+      expect(models).toEqual([]);
+
+      // Case 2: Pre-existing valid data. saveModel(invalid) must not overwrite or add invalid.
+      await storage.saveModel(valid);
+      await storage.saveModel(invalid);
+      models = await storage.loadModels();
+      expect(models).toHaveLength(1);
+      expect(models[0].id).toBe("openai/gpt-4o");
+
+      const raw = await readFile(modelsPath, "utf-8");
+      const parsed = JSON.parse(raw) as unknown;
+      expect(Array.isArray(parsed)).toBe(true);
+      const ids = (parsed as { id?: string }[]).map((m) => m?.id);
+      expect(ids).not.toContain("bad");
+
+      expect(warnSpy).toHaveBeenCalled();
+      expect(warnSpy.mock.calls.some((c) => String(c[0] ?? "").includes("[ModelHR]"))).toBe(true);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("saveModel writes valid entry", async () => {

@@ -1,5 +1,10 @@
 /**
  * Scoring service: computeModelScore, getPrior, computeModelScoreWithBreakdown.
+ *
+ * Uses normalized weighted scoring (base*0.25 + expertise*0.35 + prior*0.40 = qualityBase ≤ 1)
+ * with subtractive cost/status penalties. Enables "top-down expensive, bottom-up cheap":
+ * - Premium tier: higher cost threshold (0.02) → expensive models (e.g. gpt-4o) avoid penalty → score by quality.
+ * - Cheap tier: low threshold (0.00025) → expensive models get max penalty → cheap models (e.g. gpt-4o-mini) win.
  */
 
 import type {
@@ -13,10 +18,11 @@ import type { RegistryService } from "../registry/registryService.js";
 const DEFAULT_INPUT_TOKENS = 2000;
 const DEFAULT_OUTPUT_TOKENS = 1000;
 
+/** Premium tier allows higher cost (prefer quality); cheap tier penalizes expensive models. */
 const COST_THRESHOLDS: Record<"cheap" | "standard" | "premium", number> = {
   cheap: 0.00025,
   standard: 0.0015,
-  premium: 0.003,
+  premium: 0.02,
 };
 
 function estimateListCost(model: ModelRegistryEntry): number {
@@ -83,9 +89,14 @@ export class ScoreService {
 
     const baseReliability = model.reliability ?? 0.7;
     const expertiseVal = model.expertise?.[ctx.taskType] ?? 0.7;
-    const expertiseComponent = expertiseVal * 0.4;
     const priorQualityVal = prior?.qualityPrior ?? 0.7;
-    const priorQualityComponent = priorQualityVal * 0.6;
+
+    /** Weighted sum: max 1.0 when all components are 1. Enables meaningful differentiation after penalties. */
+    const WEIGHTS = { base: 0.25, expertise: 0.35, prior: 0.4 };
+    const baseComponent = baseReliability * WEIGHTS.base;
+    const expertiseComponent = expertiseVal * WEIGHTS.expertise;
+    const priorQualityComponent = priorQualityVal * WEIGHTS.prior;
+    const qualityBase = baseComponent + expertiseComponent + priorQualityComponent;
 
     const listCost = estimateListCost(model);
     const costMult = prior?.costMultiplier ?? 1;
@@ -96,12 +107,10 @@ export class ScoreService {
     if (status === "deprecated") statusPenaltyVal = 0.1;
     else if (status === "probation") statusPenaltyVal = 0.15;
 
-    const rawScore =
-      baseReliability + expertiseComponent + priorQualityComponent - costPenaltyVal - statusPenaltyVal;
-    const finalScore = Math.max(0, Math.min(1, rawScore));
+    const finalScore = Math.max(0, Math.min(1, qualityBase - costPenaltyVal - statusPenaltyVal));
 
     const breakdown: ModelScoreBreakdown = {
-      baseReliability,
+      baseReliability: baseComponent,
       expertiseComponent,
       priorQualityComponent,
       statusPenalty: statusPenaltyVal,

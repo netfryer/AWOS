@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProviderStatus } from "../../../../../dist/src/lib/procurement/index.js";
-import { listModels } from "../../../../../dist/src/lib/model-hr/index.js";
+import { getProviderStatus } from "../../../../../src/lib/procurement/index";
+import { listModels } from "../../../../../src/lib/model-hr/index";
 
 /** GET: get provider status (enabled + credentials) for tenant */
 export async function GET(request: NextRequest) {

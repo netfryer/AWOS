@@ -3,7 +3,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { rejectAction, getActionById } from "../../../../../../dist/src/lib/model-hr/index.js";
+import { rejectAction, getActionById } from "../../../../../../../src/lib/model-hr/index";
 
 const RejectBodySchema = z.object({
   rejectedBy: z.string().min(1, "rejectedBy is required"),

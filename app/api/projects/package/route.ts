@@ -2,11 +2,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { packageWork, validateWorkPackages } from "../../../../dist/src/lib/planning/packageWork.js";
-import { auditDirectorOutput } from "../../../../dist/src/lib/planning/councilAudit.js";
-import { llmExecuteJsonStrict } from "../../../../dist/src/lib/llm/llmExecuteJson.js";
-import { getTrustTracker } from "../../../../dist/src/lib/governance/trustTracker.js";
-import { getModelRegistryForRuntime } from "../../../../dist/src/lib/model-hr/index.js";
+import { packageWork, validateWorkPackages } from "../../../../src/lib/planning/packageWork";
+import { auditDirectorOutput } from "../../../../src/lib/planning/councilAudit";
+import { llmExecuteJsonStrict } from "../../../../src/lib/llm/llmExecuteJson";
+import { getTrustTracker } from "../../../../src/lib/governance/trustTracker";
+import { getModelRegistryForRuntime } from "../../../../src/lib/model-hr/index";
 
 const WorkRoleSchema = z.enum(["owner", "contributor", "reviewer", "approver", "stakeholder"]);
 

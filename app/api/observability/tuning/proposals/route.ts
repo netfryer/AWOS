@@ -1,13 +1,13 @@
 // ─── app/api/observability/tuning/proposals/route.ts ──────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
-import { getRunLedgerStore } from "../../../../../dist/src/lib/observability/runLedger.js";
+import { getRunLedgerStore } from "../../../../../src/lib/observability/runLedger";
 import {
   summarizeLedger,
   aggregateKpis,
-} from "../../../../../dist/src/lib/observability/analytics.js";
-import { proposeTuning } from "../../../../../dist/src/lib/observability/tuning.js";
-import { getPortfolioMode } from "../../../../../dist/src/lib/governance/portfolioConfig.js";
+} from "../../../../../src/lib/observability/analytics";
+import { proposeTuning } from "../../../../../src/lib/observability/tuning";
+import { getPortfolioMode } from "../../../../../src/lib/governance/portfolioConfig";
 
 function clampNum(val: unknown, min: number, max: number, def: number): number {
   if (val == null || val === "") return def;

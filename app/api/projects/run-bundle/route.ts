@@ -1,10 +1,10 @@
 // ─── app/api/projects/run-bundle/route.ts ───────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
-import { getRunLedgerStore } from "../../../../dist/src/lib/observability/runLedger.js";
-import { summarizeLedger } from "../../../../dist/src/lib/observability/analytics.js";
-import { getTrustTracker } from "../../../../dist/src/lib/governance/trustTracker.js";
-import { getVarianceStatsTracker } from "../../../../dist/src/varianceStats.js";
+import { getRunLedgerStore } from "../../../../src/lib/observability/runLedger";
+import { summarizeLedger } from "../../../../src/lib/observability/analytics";
+import { getTrustTracker } from "../../../../src/lib/governance/trustTracker";
+import { getVarianceStatsTracker } from "../../../../src/varianceStats";
 
 function err(code: string, message: string, status = 400) {
   return NextResponse.json(

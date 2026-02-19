@@ -1,7 +1,7 @@
 // ─── src/app/api/projects/ledger/route.ts ───────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
-import { getRunLedgerStore } from "../../../../dist/src/lib/observability/runLedger.js";
+import { getRunLedgerStore } from "../../../../src/lib/observability/runLedger";
 
 function err(code: string, message: string, details?: unknown) {
   return NextResponse.json(

@@ -130,4 +130,14 @@ describe("computePredictedCostUSD", () => {
     expect(result.inputsBreakdown.rawCostUSD).toBeCloseTo(expectedRaw, 6);
     expect(result.predictedCostUSD).toBeCloseTo(expectedRaw, 6);
   });
+
+  it("produces predictedCostUSD within ~2x of actual for typical run (~1400 tokens)", () => {
+    const entry = makeEntry();
+    const tokens = { input: 840, output: 560 };
+    const result = computePredictedCostUSD(entry, tokens, BASE_CTX, undefined);
+    const actualApprox = 0.009;
+    expect(result.predictedCostUSD).toBeGreaterThan(0.001);
+    expect(result.predictedCostUSD).toBeLessThan(actualApprox * 3);
+    expect(result.predictedCostUSD).toBeCloseTo(0.840 * 0.0025 + 0.56 * 0.01, 4);
+  });
 });

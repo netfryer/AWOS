@@ -1,7 +1,7 @@
 // ─── app/api/ops/model-hr/signals/route.ts ─────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
-import { readModelHrSignals } from "../../../../../dist/src/lib/model-hr/index.js";
+import { readModelHrSignals } from "../../../../../src/lib/model-hr/index";
 
 function err500(code: string, message: string, details?: unknown) {
   return NextResponse.json(

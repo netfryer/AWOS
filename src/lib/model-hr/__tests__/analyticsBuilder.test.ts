@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdir, writeFile, rm } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
-import { buildModelHrAnalytics } from "../analytics/analyticsBuilder.js";
+import { buildModelHrAnalytics, DEFAULT_ANALYTICS_REGISTRY } from "../analytics/analyticsBuilder.js";
 
 describe("analyticsBuilder", () => {
   let testDir: string;
@@ -29,7 +29,8 @@ describe("analyticsBuilder", () => {
     const result = await buildModelHrAnalytics(24);
     expect(result.success).toBe(true);
     expect(result.windowHours).toBe(24);
-    expect(result.registry).toEqual({ health: "OK", fallbackCount: 0 });
+    /** Canonical contract: registry.health, registry.fallbackCount */
+    expect(result.registry).toEqual(DEFAULT_ANALYTICS_REGISTRY);
     expect(result.routing).toEqual({
       totalRoutes: 0,
       enforceCheapestViableRate: 0,

@@ -2,6 +2,10 @@
  * Aggregated analytics for Model HR and routing quality.
  * Sources: registry-fallback, signals, observations, ledger (in-memory), models.
  * Caps observations at 5k. Handles missing files gracefully.
+ *
+ * Canonical payload contract:
+ *   registry: { health: "OK" | "FALLBACK", fallbackCount: number }
+ *   - fallbackCount is scoped by windowHours (e.g. last 24h)
  */
 
 import { readFile, readdir } from "fs/promises";
@@ -10,6 +14,12 @@ import type { ModelObservation } from "../types.js";
 import { getAnalyticsObservationCap } from "../config.js";
 
 const OBSERVATIONS_PER_MODEL = 100;
+
+/** Canonical default when all files are missing. Single source of truth. */
+export const DEFAULT_ANALYTICS_REGISTRY = {
+  health: "OK" as const,
+  fallbackCount: 0,
+} satisfies { health: "OK" | "FALLBACK"; fallbackCount: number };
 
 function getDataDir(): string {
   return process.env.MODEL_HR_DATA_DIR ?? join(process.cwd(), ".data", "model-hr");
@@ -204,13 +214,15 @@ export async function buildModelHrAnalytics(
     .slice(0, 10);
 
   const routeDenom = totalRoutes || 1;
+  const registry =
+    fallbackCount === 0
+      ? DEFAULT_ANALYTICS_REGISTRY
+      : { health: "FALLBACK" as const, fallbackCount };
+
   return {
     success: true,
     windowHours,
-    registry: {
-      health: fallbackCount > 0 ? "FALLBACK" : "OK",
-      fallbackCount,
-    },
+    registry,
     routing: {
       totalRoutes,
       enforceCheapestViableRate: enforceCheapestViableCount / routeDenom,

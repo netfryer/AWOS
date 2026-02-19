@@ -6,7 +6,7 @@ import {
   setTuningEnabled,
   isAllowAutoApply,
   setAllowAutoApply,
-} from "../../../../../dist/src/lib/observability/tuningConfig.js";
+} from "../../../../../src/lib/observability/tuningConfig";
 
 export async function GET() {
   try {

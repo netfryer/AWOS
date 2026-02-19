@@ -13,6 +13,17 @@ import {
 
 const SCENARIO_RUN_FIXTURES: Fixture[] = [
   {
+    name: "CSV → JSON Stats CLI (preset)",
+    description: "Multi-worker preset: strategy (premium) + 3 workers (cheap) + aggregation + QA",
+    payload: {
+      presetId: "csv-json-cli-demo",
+      projectBudgetUSD: 8,
+      tierProfile: "standard",
+      concurrency: { worker: 3, qa: 1 },
+      async: true,
+    },
+  },
+  {
     name: "CLI CSV full run",
     description: "Plan → Package → Run, standard tier, async",
     payload: {
@@ -292,6 +303,7 @@ export default function OpsRunPage() {
   const [concurrencyWorker, setConcurrencyWorker] = useState(3);
   const [concurrencyQa, setConcurrencyQa] = useState(1);
   const [asyncMode, setAsyncMode] = useState(false);
+  const [presetId, setPresetId] = useState<string>("");
 
   const [plan, setPlan] = useState<unknown>(null);
   const [audit, setAudit] = useState<unknown>(null);
@@ -353,17 +365,19 @@ export default function OpsRunPage() {
       }
     : null;
 
-  const scenarioPayload = {
-    directive,
-    projectBudgetUSD,
-    tierProfile,
-    difficulty,
-    estimateOnly,
-    includeCouncilAudit,
-    includeCouncilDebug,
-    concurrency: { worker: concurrencyWorker, qa: concurrencyQa },
-    async: asyncMode,
-  };
+  const scenarioPayload = presetId
+    ? { presetId, projectBudgetUSD, tierProfile, concurrency: { worker: concurrencyWorker, qa: concurrencyQa }, async: asyncMode }
+    : {
+        directive,
+        projectBudgetUSD,
+        tierProfile,
+        difficulty,
+        estimateOnly,
+        includeCouncilAudit,
+        includeCouncilDebug,
+        concurrency: { worker: concurrencyWorker, qa: concurrencyQa },
+        async: asyncMode,
+      };
 
   function buildLedgerSummaryFromLedger(l: {
     costs?: Record<string, number>;
@@ -616,6 +630,8 @@ export default function OpsRunPage() {
       if (c && typeof c.worker === "number") setConcurrencyWorker(c.worker);
       if (c && typeof c.qa === "number") setConcurrencyQa(c.qa);
     } else if (jsonTestMode === "ScenarioRunRequest") {
+      if (typeof v.presetId === "string") setPresetId(v.presetId);
+      else setPresetId("");
       if (typeof v.directive === "string") setDirective(v.directive);
       if (typeof v.projectBudgetUSD === "number") setProjectBudgetUSD(v.projectBudgetUSD);
       if (["cheap", "standard", "premium"].includes(String(v.tierProfile))) setTierProfile(v.tierProfile as "cheap" | "standard" | "premium");

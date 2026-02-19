@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runProject } from "../../../../dist/src/project/runProject.js";
-import type { ProjectRequest, ProjectResult } from "../../../../dist/src/project/types.js";
+import { runProject } from "../../../../src/project/runProject";
+import type { ProjectRequest, ProjectResult } from "../../../../src/project/types";
 
 export async function POST(request: NextRequest) {
   try {

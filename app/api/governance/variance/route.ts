@@ -1,8 +1,8 @@
 // ─── src/app/api/governance/variance/route.ts ───────────────────────────────
 
 import { NextResponse } from "next/server";
-import { getVarianceStatsTracker } from "../../../../dist/src/varianceStats.js";
-import { getTrustTracker } from "../../../../dist/src/lib/governance/trustTracker.js";
+import { getVarianceStatsTracker } from "../../../../src/varianceStats";
+import { getTrustTracker } from "../../../../src/lib/governance/trustTracker";
 
 function err500(code: string, message: string, details?: unknown) {
   return NextResponse.json(

@@ -4,26 +4,36 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { planProject } from "../../../../dist/src/lib/planning/planProject.js";
-import { packageWork, validateWorkPackages } from "../../../../dist/src/lib/planning/packageWork.js";
-import { auditDirectorOutput } from "../../../../dist/src/lib/planning/councilAudit.js";
-import { runWorkPackages } from "../../../../dist/src/lib/execution/runWorkPackages.js";
-import { createRunSession, updateRunSession } from "../../../../dist/src/lib/execution/runSessionStore.js";
-import { getRunLedgerStore } from "../../../../dist/src/lib/observability/runLedger.js";
-import { summarizeLedger } from "../../../../dist/src/lib/observability/analytics.js";
-import { llmExecuteJsonStrict } from "../../../../dist/src/lib/llm/llmExecuteJson.js";
-import { llmTextExecute } from "../../../../dist/src/lib/llm/llmTextExecute.js";
-import { route } from "../../../../dist/src/router.js";
-import { deterministicDecomposeDirective } from "../../../../dist/src/project/deterministicDecomposer.js";
-import { getVarianceStatsTracker } from "../../../../dist/src/varianceStats.js";
-import { getTrustTracker } from "../../../../dist/src/lib/governance/trustTracker.js";
-import { setPortfolioMode, getPortfolioMode } from "../../../../dist/src/lib/governance/portfolioConfig.js";
-import { getCachedPortfolio } from "../../../../dist/src/lib/governance/portfolioCache.js";
-import type { PortfolioRecommendation } from "../../../../dist/src/lib/governance/portfolioOptimizer.js";
-import { getModelRegistryForRuntime } from "../../../../dist/src/lib/model-hr/index.js";
+import { planProject } from "../../../../src/lib/planning/planProject";
+import { packageWork, validateWorkPackages } from "../../../../src/lib/planning/packageWork";
+import { auditDirectorOutput } from "../../../../src/lib/planning/councilAudit";
+import { runWorkPackages } from "../../../../src/lib/execution/runWorkPackages";
+import { createRunSession, updateRunSession } from "../../../../src/lib/execution/runSessionStore";
+import { getRunLedgerStore } from "../../../../src/lib/observability/runLedger";
+import { summarizeLedger } from "../../../../src/lib/observability/analytics";
+import { llmExecuteJsonStrict } from "../../../../src/lib/llm/llmExecuteJson";
+import { llmTextExecute } from "../../../../src/lib/llm/llmTextExecute";
+import { route } from "../../../../src/router";
+import { deterministicDecomposeDirective } from "../../../../src/project/deterministicDecomposer";
+import { getVarianceStatsTracker } from "../../../../src/varianceStats";
+import { getTrustTracker } from "../../../../src/lib/governance/trustTracker";
+import { setPortfolioMode, getPortfolioMode } from "../../../../src/lib/governance/portfolioConfig";
+import { getCachedPortfolio } from "../../../../src/lib/governance/portfolioCache";
+import type { PortfolioRecommendation } from "../../../../src/lib/governance/portfolioOptimizer";
+import { getModelRegistryForRuntime } from "../../../../src/lib/model-hr/index";
+import {
+  CSV_JSON_CLI_DEMO_PACKAGES,
+  CSV_JSON_CLI_DEMO_DIRECTIVE,
+} from "../../../../src/lib/execution/presets/csvJsonCliDemo";
+import { saveDemoRun, extractDeliverablesFromRuns } from "../../../lib/demoRunsStore";
+
+const PRESETS: Record<string, { packages: import("../../../../src/lib/planning/packageWork").AtomicWorkPackage[]; directive: string }> = {
+  "csv-json-cli-demo": { packages: CSV_JSON_CLI_DEMO_PACKAGES, directive: CSV_JSON_CLI_DEMO_DIRECTIVE },
+};
 
 const RunScenarioRequestSchema = z.object({
-  directive: z.string().min(1),
+  directive: z.string().optional(),
+  presetId: z.string().optional(),
   projectBudgetUSD: z.number().positive(),
   tierProfile: z.enum(["cheap", "standard", "premium"]),
   difficulty: z.enum(["low", "medium", "high"]).optional(),
@@ -95,6 +105,13 @@ export async function POST(request: NextRequest) {
     }
     const body = parsed.data;
 
+    if (body.directive == null && body.presetId == null) {
+      return err("VALIDATION_ERROR", "Either directive or presetId must be provided");
+    }
+    if (body.presetId != null && !PRESETS[body.presetId]) {
+      return err("VALIDATION_ERROR", `Unknown presetId: ${body.presetId}. Available: ${Object.keys(PRESETS).join(", ")}`);
+    }
+
     if (body.portfolioMode != null) {
       setPortfolioMode(body.portfolioMode);
     }
@@ -110,37 +127,59 @@ export async function POST(request: NextRequest) {
       jsonSchema: z.ZodType
     ) => llmExecuteJsonStrict({ modelId, prompt, zodSchema: jsonSchema });
 
-    const planCtx = {
-      modelRegistry,
-      varianceStatsTracker: varianceTracker,
-      trustTracker,
-      route,
-      deterministicDecomposeDirective,
-      llmExecute,
-    };
+    let plan: import("../../../../src/lib/schemas/governance").ProjectPlan | undefined;
+    let packages: import("../../../../src/lib/planning/packageWork").AtomicWorkPackage[];
+    const directive = body.presetId
+      ? PRESETS[body.presetId].directive
+      : (body.directive as string);
 
-    const subtasks = deterministicDecomposeDirective(body.directive);
-    const subtasksWithBudget = subtasks.map((s) => ({
-      ...s,
-      allocatedBudgetUSD: s.allocatedBudgetUSD ?? body.projectBudgetUSD / Math.max(1, subtasks.length),
-    }));
+    if (body.presetId) {
+      packages = [...PRESETS[body.presetId].packages];
+      plan = {
+        id: randomUUID(),
+        objective: directive,
+        workPackages: packages.map((p) => ({
+          id: p.id,
+          name: p.name,
+          description: p.description,
+          ownerRole: "owner" as const,
+          deliverables: [p.description ?? p.name],
+          dependencies: p.dependencies,
+        })),
+      };
+    } else {
+      const planCtx = {
+        modelRegistry,
+        varianceStatsTracker: varianceTracker,
+        trustTracker,
+        route,
+        deterministicDecomposeDirective,
+        llmExecute,
+      };
 
-    const planResult = await planProject(
-      {
-        directive: body.directive,
-        projectBudgetUSD: body.projectBudgetUSD,
-        tierProfile: body.tierProfile,
-        estimateOnly: body.estimateOnly,
-        difficulty: body.difficulty ?? "medium",
-        subtasks: subtasksWithBudget,
-      },
-      planCtx
-    );
+      const subtasks = deterministicDecomposeDirective(directive);
+      const subtasksWithBudget = subtasks.map((s) => ({
+        ...s,
+        allocatedBudgetUSD: s.allocatedBudgetUSD ?? body.projectBudgetUSD / Math.max(1, subtasks.length),
+      }));
 
-    const plan = planResult.plan;
-    const packages = packageWork(plan, { cwd: body.cwd });
+      const planResult = await planProject(
+        {
+          directive,
+          projectBudgetUSD: body.projectBudgetUSD,
+          tierProfile: body.tierProfile,
+          estimateOnly: body.estimateOnly,
+          difficulty: body.difficulty ?? "medium",
+          subtasks: subtasksWithBudget,
+        },
+        planCtx
+      );
+
+      plan = planResult.plan;
+      packages = packageWork(plan, { cwd: body.cwd });
+    }
+
     validateWorkPackages(packages);
-
     let auditedPackages = packages;
     let audit: { auditPass: boolean; confidence: number; issues: unknown[]; recommendedPatches: unknown[]; members: string[]; skipped?: boolean; warning?: string } | undefined;
 
@@ -282,6 +321,18 @@ export async function POST(request: NextRequest) {
                 partialResult: result,
               },
             });
+            const asyncLedger = ledgerStore.getLedger(runSessionId);
+            const asyncSummary = asyncLedger ? summarizeLedger(asyncLedger) : undefined;
+            const deliverables = extractDeliverablesFromRuns(result.runs);
+            await saveDemoRun(runSessionId, {
+              runSessionId,
+              timestamp: new Date().toISOString(),
+              plan,
+              packages: auditedPackages,
+              result: { runs: result.runs, qaResults: result.qaResults, escalations: result.escalations, budget: result.budget, warnings: result.warnings },
+              deliverables: Object.keys(deliverables).length > 0 ? deliverables : undefined,
+              bundle: { ledger: asyncLedger ?? undefined, summary: asyncSummary ?? undefined },
+            });
           } catch (e) {
             ledgerStore.finalizeLedger(runSessionId);
             updateRunSession(runSessionId, {
@@ -331,6 +382,17 @@ export async function POST(request: NextRequest) {
       ledger: ledger ?? null,
       summary: summary ?? null,
     };
+
+    const deliverables = extractDeliverablesFromRuns(result.runs);
+    await saveDemoRun(runSessionId, {
+      runSessionId,
+      timestamp: new Date().toISOString(),
+      plan,
+      packages: auditedPackages,
+      result: { runs: result.runs, qaResults: result.qaResults, escalations: result.escalations, budget: result.budget, warnings: result.warnings },
+      deliverables: Object.keys(deliverables).length > 0 ? deliverables : undefined,
+      bundle: { ledger: ledger ?? undefined, summary: summary ?? undefined },
+    });
 
     if (body.trust !== false) {
       const trust = trustTracker.getTrustMap();

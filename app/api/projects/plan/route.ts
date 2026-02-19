@@ -2,13 +2,13 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { planProject } from "../../../../dist/src/lib/planning/planProject.js";
-import { llmExecuteJsonStrict } from "../../../../dist/src/lib/llm/llmExecuteJson.js";
-import { route } from "../../../../dist/src/router.js";
-import { deterministicDecomposeDirective } from "../../../../dist/src/project/deterministicDecomposer.js";
-import { getVarianceStatsTracker } from "../../../../dist/src/varianceStats.js";
-import { getTrustTracker } from "../../../../dist/src/lib/governance/trustTracker.js";
-import { getModelRegistryForRuntime } from "../../../../dist/src/lib/model-hr/index.js";
+import { planProject } from "../../../../src/lib/planning/planProject";
+import { llmExecuteJsonStrict } from "../../../../src/lib/llm/llmExecuteJson";
+import { route } from "../../../../src/router";
+import { deterministicDecomposeDirective } from "../../../../src/project/deterministicDecomposer";
+import { getVarianceStatsTracker } from "../../../../src/varianceStats";
+import { getTrustTracker } from "../../../../src/lib/governance/trustTracker";
+import { getModelRegistryForRuntime } from "../../../../src/lib/model-hr/index";
 
 const ProjectSubtaskSchema = z.object({
   id: z.string(),

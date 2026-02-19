@@ -2,7 +2,7 @@
 // GET /api/ops/model-hr/actions?limit=
 
 import { NextRequest, NextResponse } from "next/server";
-import { listActions } from "../../../../../dist/src/lib/model-hr/index.js";
+import { listActions } from "../../../../../src/lib/model-hr/index";
 
 export async function GET(request: NextRequest) {
   try {

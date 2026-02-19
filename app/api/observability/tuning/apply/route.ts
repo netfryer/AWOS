@@ -1,15 +1,15 @@
 // ─── app/api/observability/tuning/apply/route.ts ──────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
-import { getRunLedgerStore } from "../../../../../dist/src/lib/observability/runLedger.js";
+import { getRunLedgerStore } from "../../../../../src/lib/observability/runLedger";
 import {
   summarizeLedger,
   aggregateKpis,
-} from "../../../../../dist/src/lib/observability/analytics.js";
-import { proposeTuning } from "../../../../../dist/src/lib/observability/tuning.js";
-import { getPortfolioMode, setPortfolioMode } from "../../../../../dist/src/lib/governance/portfolioConfig.js";
-import { isTuningEnabled } from "../../../../../dist/src/lib/observability/tuningConfig.js";
-import { setForceRefreshNext } from "../../../../../dist/src/lib/governance/portfolioCache.js";
+} from "../../../../../src/lib/observability/analytics";
+import { proposeTuning } from "../../../../../src/lib/observability/tuning";
+import { getPortfolioMode, setPortfolioMode } from "../../../../../src/lib/governance/portfolioConfig";
+import { isTuningEnabled } from "../../../../../src/lib/observability/tuningConfig";
+import { setForceRefreshNext } from "../../../../../src/lib/governance/portfolioCache";
 
 function err400(code: string, message: string, details?: unknown) {
   return NextResponse.json(

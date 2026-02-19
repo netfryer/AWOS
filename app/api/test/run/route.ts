@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { runTask } from "../../../../dist/src/runTask.js";
-import { route } from "../../../../dist/src/router.js";
-import { createExecutor } from "../../../../dist/src/executor/index.js";
-import { mockExecutor } from "../../../../dist/src/executor/mockExecutor.js";
-import { DEMO_CONFIG } from "../../../../dist/src/demoModels.js";
-import { getModelRegistryForRuntime } from "../../../../dist/src/lib/model-hr/index.js";
-import type { TaskCard, TaskType, Difficulty, RouterConfig } from "../../../../dist/src/types.js";
-import type { Executor } from "../../../../dist/src/executor/types.js";
+import { runTask } from "../../../../src/runTask";
+import { route } from "../../../../src/router";
+import { createExecutor } from "../../../../src/executor/index";
+import { mockExecutor } from "../../../../src/executor/mockExecutor";
+import { DEMO_CONFIG } from "../../../../src/demoModels";
+import { getModelRegistryForRuntime } from "../../../../src/lib/model-hr/index";
+import type { TaskCard, TaskType, Difficulty, RouterConfig } from "../../../../src/types";
+import type { Executor } from "../../../../src/executor/types";
 
 type Profile = "fast" | "strict" | "low_cost";
 

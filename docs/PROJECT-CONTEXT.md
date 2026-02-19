@@ -102,9 +102,9 @@ An **LLM task orchestration platform** that turns high-level directives into exe
 
 ## Build / Run
 
-- `npm run build` – Compiles `src/` → `dist/` (API routes import from dist)
-- `npm run dev:ui` – Build + `next dev -p 3000`
-- API routes import from `../../../../dist/src/...` (relative to route file)
+- `npm run build` – Compiles `src/` → `dist/` (for CLI/scripts; Next.js imports source directly)
+- `npm run dev:ui` – `next dev -p 3000` (no pre-build required)
+- API routes import from `../../../../src/...` (relative to route file; Next compiles TS on the fly)
 
 ---
 

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getRegistryFallbackCountLastHours } from "../../../../../dist/src/lib/model-hr/index.js";
+import { getRegistryFallbackCountLastHours } from "../../../../../src/lib/model-hr/index";
 
 export async function GET() {
   try {

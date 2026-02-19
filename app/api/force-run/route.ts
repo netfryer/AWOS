@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { mockExecutor } from "../../../dist/src/executor/mockExecutor.js";
-import { appendJsonl } from "../../../dist/src/logger.js";
-import { validate } from "../../../dist/src/validator.js";
-import { estimateTokensForTask } from "../../../dist/src/router.js";
-import { DEMO_CONFIG } from "../../../dist/src/demoModels.js";
-import { getModelRegistryForRuntime } from "../../../dist/src/lib/model-hr/index.js";
-import type { TaskCard, TaskType, Difficulty, ModelSpec } from "../../../dist/src/types.js";
+import { mockExecutor } from "../../../src/executor/mockExecutor";
+import { appendJsonl } from "../../../src/logger";
+import { validate } from "../../../src/validator";
+import { estimateTokensForTask } from "../../../src/router";
+import { DEMO_CONFIG } from "../../../src/demoModels";
+import { getModelRegistryForRuntime } from "../../../src/lib/model-hr/index";
+import type { TaskCard, TaskType, Difficulty, ModelSpec } from "../../../src/types";
 
 type Profile = "fast" | "strict" | "low_cost";
 

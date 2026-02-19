@@ -7,7 +7,7 @@ import {
   upsertModel,
   getModel,
   emitModelHrSignal,
-} from "../../../../../dist/src/lib/model-hr/index.js";
+} from "../../../../../src/lib/model-hr/index";
 
 function err400(code: string, message: string, details?: unknown) {
   return NextResponse.json(

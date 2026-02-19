@@ -2,8 +2,8 @@
 // GET /api/ops/model-hr/analytics?windowHours=24
 
 import { NextRequest, NextResponse } from "next/server";
-import { buildModelHrAnalytics } from "../../../../../dist/src/lib/model-hr/analytics/index.js";
-import { getRunLedgerStore } from "../../../../../dist/src/lib/observability/runLedger.js";
+import { buildModelHrAnalytics } from "../../../../../src/lib/model-hr/analytics/index";
+import { getRunLedgerStore } from "../../../../../src/lib/observability/runLedger";
 
 export async function GET(request: NextRequest) {
   try {

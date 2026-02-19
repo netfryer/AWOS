@@ -331,7 +331,7 @@ export default function ChatPage() {
               <option value="low_cost">low_cost</option>
             </select>
           </label>
-          <label style={{ marginLeft: 16 }}>
+          <label>
             Type:{" "}
             <select
               value={taskType}
@@ -344,7 +344,7 @@ export default function ChatPage() {
               <option value="general">general</option>
             </select>
           </label>
-          <label style={{ marginLeft: 16 }}>
+          <label>
             Difficulty:{" "}
             <select
               value={difficulty}
@@ -356,7 +356,7 @@ export default function ChatPage() {
               <option value="high">high</option>
             </select>
           </label>
-          <label style={{ marginLeft: 16 }}>
+          <label>
             Test mode:{" "}
             <select
               value={testMode}
@@ -368,7 +368,7 @@ export default function ChatPage() {
               <option value="fail">fail (executor error)</option>
             </select>
           </label>
-          <label style={{ marginLeft: 16 }}>
+          <label>
             minQuality:{" "}
             <input
               type="number"
@@ -379,7 +379,7 @@ export default function ChatPage() {
               style={styles.numInput}
             />
           </label>
-          <label style={{ marginLeft: 16 }}>
+          <label>
             maxCostUSD:{" "}
             <input
               type="number"
@@ -833,25 +833,27 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: "wrap",
     display: "flex",
     alignItems: "center",
-    gap: "8px 20px",
+    gap: "12px 20px",
     color: "#475569",
   },
   select: {
-    padding: "4px 8px",
+    padding: "8px 12px",
     marginLeft: 4,
-    borderRadius: 4,
+    borderRadius: 6,
     border: "1px solid #cbd5e1",
     backgroundColor: "#fff",
     color: "#334155",
+    fontSize: 13,
   },
   numInput: {
-    width: 90,
-    padding: "4px 8px",
+    width: 100,
+    padding: "8px 12px",
     marginLeft: 4,
-    borderRadius: 4,
+    borderRadius: 6,
     border: "1px solid #cbd5e1",
     backgroundColor: "#fff",
     color: "#334155",
+    fontSize: 13,
   },
   messages: {
     flex: 1,

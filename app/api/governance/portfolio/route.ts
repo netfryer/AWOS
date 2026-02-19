@@ -1,10 +1,10 @@
 // ─── app/api/governance/portfolio/route.ts ───────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
-import { recommendPortfolio } from "../../../../dist/src/lib/governance/portfolioOptimizer.js";
-import { getTrustTracker } from "../../../../dist/src/lib/governance/trustTracker.js";
-import { getVarianceStatsTracker } from "../../../../dist/src/varianceStats.js";
-import { getModelRegistryForRuntime } from "../../../../dist/src/lib/model-hr/index.js";
+import { recommendPortfolio } from "../../../../src/lib/governance/portfolioOptimizer";
+import { getTrustTracker } from "../../../../src/lib/governance/trustTracker";
+import { getVarianceStatsTracker } from "../../../../src/varianceStats";
+import { getModelRegistryForRuntime } from "../../../../src/lib/model-hr/index";
 
 function clampNum(val: unknown, min: number, max: number, def: number): number {
   if (val == null || val === "") return def;

@@ -1,7 +1,7 @@
 // ─── src/app/api/projects/run-session/route.ts ──────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
-import { getRunSession } from "../../../../dist/src/lib/execution/runSessionStore.js";
+import { getRunSession } from "../../../../src/lib/execution/runSessionStore";
 
 function err(code: string, message: string, details?: unknown) {
   return NextResponse.json(

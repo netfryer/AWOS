@@ -11,7 +11,7 @@
 // ]}
 
 import { NextRequest, NextResponse } from "next/server";
-import { loadPriorsForModel } from "../../../../../../../dist/src/lib/model-hr/index.js";
+import { loadPriorsForModel } from "../../../../../../../src/lib/model-hr/index";
 
 export async function GET(
   _request: NextRequest,

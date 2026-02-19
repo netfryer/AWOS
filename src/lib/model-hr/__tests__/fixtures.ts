@@ -18,8 +18,24 @@ export const FIXTURE_MODEL_ACTIVE: ModelRegistryEntry = {
   },
   displayName: "GPT-4o",
   pricing: { inPer1k: 0.0025, outPer1k: 0.01, currency: "USD" },
-  expertise: { code: 0.92, writing: 0.88, analysis: 0.9, general: 0.9 },
+  expertise: { code: 0.92, writing: 0.88, analysis: 0.9, strategy: 0.92, general: 0.9 },
   reliability: 0.98,
+  createdAtISO: now,
+  updatedAtISO: now,
+};
+
+/** Cheaper, lower-expertise model for routing differentiation tests. */
+export const FIXTURE_MODEL_GPT4O_MINI: ModelRegistryEntry = {
+  id: "gpt-4o-mini",
+  identity: {
+    provider: "openai",
+    modelId: "gpt-4o-mini",
+    status: "active",
+  },
+  displayName: "GPT-4o Mini",
+  pricing: { inPer1k: 0.00008, outPer1k: 0.00008, currency: "USD" },
+  expertise: { code: 0.78, writing: 0.82, analysis: 0.75, strategy: 0.72, general: 0.78 },
+  reliability: 0.88,
   createdAtISO: now,
   updatedAtISO: now,
 };

@@ -112,9 +112,14 @@ export const DEFAULT_ROUTER_CONFIG: RouterConfig = {
   onBudgetFail: "best_effort_within_budget",
 };
 
+/** Minimum total tokens to avoid gross underestimate from short directive (e.g. "Implement X"). */
+const MIN_TOTAL_TOKENS_DIRECTIVE = 800;
+
 /**
  * Directive-based token estimation (lower, more realistic).
  * Uses directive length when present; falls back to baseTokenEstimates otherwise.
+ * When directive is short and yields < MIN_TOTAL_TOKENS_DIRECTIVE, uses base estimates
+ * to avoid budget_exceeded escalations from underestimated predictedCostUSD.
  */
 export function estimateTokensForTask(
   task: TaskCard,
@@ -124,26 +129,32 @@ export function estimateTokensForTask(
   const cfg = config ?? DEFAULT_ROUTER_CONFIG;
   const mult = cfg.difficultyMultipliers?.[task.difficulty] ?? 1;
 
+  const baseInput =
+    cfg.baseTokenEstimates?.input?.[task.taskType] ?? DEFAULT_INPUT_TOKENS;
+  const baseOutput =
+    cfg.baseTokenEstimates?.output?.[task.taskType] ?? DEFAULT_OUTPUT_TOKENS;
+  const fallbackEst = {
+    input: Math.round(baseInput * mult),
+    output: Math.round(baseOutput * mult),
+  };
+
   if (directive != null && String(directive).trim().length > 0) {
     const len = String(directive).trim().length;
     const rawInput = Math.round(len / 4);
     const rawOutput = Math.round(rawInput * 0.6);
     const input = Math.max(200, Math.min(6000, rawInput));
     const output = Math.max(100, Math.min(2500, rawOutput));
-    return {
+    const directiveEst = {
       input: Math.round(input * mult),
       output: Math.round(output * mult),
     };
+    const total = directiveEst.input + directiveEst.output;
+    if (total >= MIN_TOTAL_TOKENS_DIRECTIVE) {
+      return directiveEst;
+    }
   }
 
-  const baseInput =
-    cfg.baseTokenEstimates?.input?.[task.taskType] ?? DEFAULT_INPUT_TOKENS;
-  const baseOutput =
-    cfg.baseTokenEstimates?.output?.[task.taskType] ?? DEFAULT_OUTPUT_TOKENS;
-  return {
-    input: Math.round(baseInput * mult),
-    output: Math.round(baseOutput * mult),
-  };
+  return fallbackEst;
 }
 
 /**

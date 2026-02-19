@@ -7,6 +7,8 @@ export interface Scenario {
   id: string;
   name: string;
   description: string;
+  /** When set, uses preset packages (skips plan/package); else uses planRequest.directive */
+  presetId?: string;
   planRequest: {
     directive: string;
     projectBudgetUSD: number;
@@ -31,6 +33,21 @@ export const SCENARIOS: Scenario[] = [
     planRequest: {
       directive: "Build a CLI tool that parses CSV files and outputs JSON statistics",
       projectBudgetUSD: 5,
+      estimateOnly: false,
+      difficulty: "medium",
+    },
+    package: { includeCouncilAudit: false },
+    run: { tierProfile: "standard", concurrency: { worker: 3, qa: 1 } },
+    variants: ["off", "prefer", "lock"],
+  },
+  {
+    id: "csv-json-cli-demo",
+    name: "CSV → JSON Stats CLI (multi-worker preset)",
+    description: "Strategy (premium) + 3 workers (cheap) parallel + aggregation + QA. Uses preset packages.",
+    presetId: "csv-json-cli-demo",
+    planRequest: {
+      directive: "Build a CLI tool that parses CSV files and outputs JSON statistics",
+      projectBudgetUSD: 8,
       estimateOnly: false,
       difficulty: "medium",
     },

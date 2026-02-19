@@ -3,17 +3,17 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { runWorkPackages } from "../../../../dist/src/lib/execution/runWorkPackages.js";
-import { createRunSession, updateRunSession } from "../../../../dist/src/lib/execution/runSessionStore.js";
-import { getRunLedgerStore } from "../../../../dist/src/lib/observability/runLedger.js";
-import { route } from "../../../../dist/src/router.js";
-import { getPortfolioMode } from "../../../../dist/src/lib/governance/portfolioConfig.js";
-import { getCachedPortfolio } from "../../../../dist/src/lib/governance/portfolioCache.js";
-import type { PortfolioRecommendation } from "../../../../dist/src/lib/governance/portfolioOptimizer.js";
-import { getVarianceStatsTracker } from "../../../../dist/src/varianceStats.js";
-import { getTrustTracker } from "../../../../dist/src/lib/governance/trustTracker.js";
-import { llmTextExecute } from "../../../../dist/src/lib/llm/llmTextExecute.js";
-import { getModelRegistryForRuntime } from "../../../../dist/src/lib/model-hr/index.js";
+import { runWorkPackages } from "../../../../src/lib/execution/runWorkPackages";
+import { createRunSession, updateRunSession } from "../../../../src/lib/execution/runSessionStore";
+import { getRunLedgerStore } from "../../../../src/lib/observability/runLedger";
+import { route } from "../../../../src/router";
+import { getPortfolioMode } from "../../../../src/lib/governance/portfolioConfig";
+import { getCachedPortfolio } from "../../../../src/lib/governance/portfolioCache";
+import type { PortfolioRecommendation } from "../../../../src/lib/governance/portfolioOptimizer";
+import { getVarianceStatsTracker } from "../../../../src/varianceStats";
+import { getTrustTracker } from "../../../../src/lib/governance/trustTracker";
+import { llmTextExecute } from "../../../../src/lib/llm/llmTextExecute";
+import { getModelRegistryForRuntime } from "../../../../src/lib/model-hr/index";
 
 function validatePortfolioCoverage(
   portfolio: PortfolioRecommendation,
@@ -41,6 +41,8 @@ const AtomicWorkPackageSchema = z.object({
   outputs: z.record(z.string(), z.unknown()),
   dependencies: z.array(z.string()),
   estimatedTokens: z.number().nonnegative(),
+  tierProfileOverride: z.enum(["cheap", "standard", "premium"]).optional(),
+  cheapestViableChosen: z.boolean().optional(),
 });
 
 const RunPackagesRequestSchema = z.object({

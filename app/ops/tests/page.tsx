@@ -117,53 +117,74 @@ export default function OpsTestsPage() {
       body: JSON.stringify({ mode: variant }),
     });
 
-    const planRes = await fetch("/api/projects/plan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        directive: scenario.planRequest.directive,
-        projectBudgetUSD: scenario.planRequest.projectBudgetUSD,
-        estimateOnly: scenario.planRequest.estimateOnly,
-        difficulty: scenario.planRequest.difficulty ?? "medium",
-      }),
-    });
-    const planData = await planRes.json();
-    if (!planRes.ok || !planData.plan) {
-      return { error: planData?.error?.message ?? "Plan failed" };
+    let sid: string;
+
+    if (scenario.presetId) {
+      const res = await fetch("/api/projects/run-scenario", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          presetId: scenario.presetId,
+          projectBudgetUSD: scenario.planRequest.projectBudgetUSD,
+          tierProfile: scenario.run.tierProfile,
+          concurrency: scenario.run.concurrency,
+          async: true,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.runSessionId) {
+        return { error: data?.error?.message ?? "Run scenario failed" };
+      }
+      sid = data.runSessionId;
+    } else {
+      const planRes = await fetch("/api/projects/plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          directive: scenario.planRequest.directive,
+          projectBudgetUSD: scenario.planRequest.projectBudgetUSD,
+          estimateOnly: scenario.planRequest.estimateOnly,
+          difficulty: scenario.planRequest.difficulty ?? "medium",
+        }),
+      });
+      const planData = await planRes.json();
+      if (!planRes.ok || !planData.plan) {
+        return { error: planData?.error?.message ?? "Plan failed" };
+      }
+
+      const pkgRes = await fetch("/api/projects/package", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          plan: planData.plan,
+          directive: scenario.planRequest.directive,
+          includeCouncilAudit: scenario.package.includeCouncilAudit,
+          tierProfile: scenario.run.tierProfile,
+          projectBudgetUSD: scenario.planRequest.projectBudgetUSD,
+        }),
+      });
+      const pkgData = await pkgRes.json();
+      if (!pkgRes.ok || !pkgData.packages?.length) {
+        return { error: pkgData?.error?.message ?? "Package failed" };
+      }
+
+      const runRes = await fetch("/api/projects/run-packages?async=true", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          packages: pkgData.packages,
+          projectBudgetUSD: scenario.planRequest.projectBudgetUSD,
+          tierProfile: scenario.run.tierProfile,
+          concurrency: scenario.run.concurrency,
+        }),
+      });
+      const runData = await runRes.json();
+      if (!runRes.ok || !runData.runSessionId) {
+        return { error: runData?.error?.message ?? "Run failed" };
+      }
+      sid = runData.runSessionId;
     }
 
-    const pkgRes = await fetch("/api/projects/package", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        plan: planData.plan,
-        directive: scenario.planRequest.directive,
-        includeCouncilAudit: scenario.package.includeCouncilAudit,
-        tierProfile: scenario.run.tierProfile,
-        projectBudgetUSD: scenario.planRequest.projectBudgetUSD,
-      }),
-    });
-    const pkgData = await pkgRes.json();
-    if (!pkgRes.ok || !pkgData.packages?.length) {
-      return { error: pkgData?.error?.message ?? "Package failed" };
-    }
-
-    const runRes = await fetch("/api/projects/run-packages?async=true", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        packages: pkgData.packages,
-        projectBudgetUSD: scenario.planRequest.projectBudgetUSD,
-        tierProfile: scenario.run.tierProfile,
-        concurrency: scenario.run.concurrency,
-      }),
-    });
-    const runData = await runRes.json();
-    if (!runRes.ok || !runData.runSessionId) {
-      return { error: runData?.error?.message ?? "Run failed" };
-    }
-
-    const sid = runData.runSessionId;
     const start = Date.now();
     let interval = POLL_INITIAL_MS;
 

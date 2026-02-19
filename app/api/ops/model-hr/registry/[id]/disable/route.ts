@@ -2,7 +2,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { disableModel } from "../../../../../../dist/src/lib/model-hr/index.js";
+import { disableModel } from "../../../../../../../src/lib/model-hr/index";
 
 function err400(code: string, message: string, details?: unknown) {
   return NextResponse.json(

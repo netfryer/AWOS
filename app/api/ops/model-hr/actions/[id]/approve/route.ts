@@ -3,7 +3,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { approveAction, getActionById, makeFileRegistryService } from "../../../../../../dist/src/lib/model-hr/index.js";
+import { approveAction, getActionById, makeFileRegistryService } from "../../../../../../../src/lib/model-hr/index";
 
 const ApproveBodySchema = z.object({
   approvedBy: z.string().min(1, "approvedBy is required"),

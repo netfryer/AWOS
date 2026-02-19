@@ -5,7 +5,7 @@ import {
   getPortfolioMode,
   setPortfolioMode,
   type PortfolioConfigMode,
-} from "../../../../dist/src/lib/governance/portfolioConfig.js";
+} from "../../../../src/lib/governance/portfolioConfig";
 
 const VALID_MODES: PortfolioConfigMode[] = ["off", "prefer", "lock"];
 

@@ -15,7 +15,6 @@ export default function OpsLayout({
             <Link href="/" style={opsStyles.navLink}>
               ← Chat
             </Link>
-            <span style={{ color: "#cbd5e1", margin: "0 4px" }}>|</span>
             <Link href="/ops/run" style={opsStyles.navLink}>
               Run
             </Link>
@@ -36,6 +35,9 @@ export default function OpsLayout({
             </Link>
             <Link href="/ops/procurement" style={opsStyles.navLink}>
               Procurement
+            </Link>
+            <Link href="/ops/demo" style={opsStyles.navLink}>
+              Demo
             </Link>
           </nav>
         </div>

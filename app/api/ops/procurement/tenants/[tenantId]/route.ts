@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getTenantConfig,
   setTenantConfig,
-} from "../../../../../../dist/src/lib/procurement/index.js";
+} from "../../../../../../src/lib/procurement/index";
 
 function err400(code: string, message: string, details?: unknown) {
   return NextResponse.json(

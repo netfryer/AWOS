@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProcurementRecommendations } from "../../../../../dist/src/lib/procurement/index.js";
+import { getProcurementRecommendations } from "../../../../../src/lib/procurement/index";
 
 /** GET: get procurement recommendations for tenant */
 export async function GET(request: NextRequest) {

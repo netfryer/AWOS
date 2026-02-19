@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { runExecutiveCouncil } from "../../../../dist/src/governance/executiveCouncil.js";
-import { getModelRegistryForRuntime } from "../../../../dist/src/lib/model-hr/index.js";
-import type { CeoDirectiveRequest } from "../../../../dist/src/governance/types.js";
+import { runExecutiveCouncil } from "../../../../src/governance/executiveCouncil";
+import { getModelRegistryForRuntime } from "../../../../src/lib/model-hr/index";
+import type { CeoDirectiveRequest } from "../../../../src/governance/types";
 
 export async function POST(request: NextRequest) {
   try {

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getVarianceStatsTracker } from "../../../../dist/src/varianceStats.js";
+import { getVarianceStatsTracker } from "../../../../src/varianceStats";
 
 export async function GET() {
   try {

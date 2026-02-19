@@ -11,7 +11,7 @@
 // ]}
 
 import { NextRequest, NextResponse } from "next/server";
-import { loadObservationsForModel } from "../../../../../../../dist/src/lib/model-hr/index.js";
+import { loadObservationsForModel } from "../../../../../../../src/lib/model-hr/index";
 
 export async function GET(
   request: NextRequest,

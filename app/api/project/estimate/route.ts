@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { estimateProjectWithROI } from "../../../../dist/src/project/estimateProject.js";
-import type { ProjectRequest, ProjectEstimate } from "../../../../dist/src/project/types.js";
+import { estimateProjectWithROI } from "../../../../src/project/estimateProject";
+import type { ProjectRequest, ProjectEstimate } from "../../../../src/project/types";
 
 export async function POST(request: NextRequest) {
   try {

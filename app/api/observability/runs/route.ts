@@ -1,8 +1,8 @@
 // ─── app/api/observability/runs/route.ts ──────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
-import { getRunLedgerStore } from "../../../../dist/src/lib/observability/runLedger.js";
-import { summarizeLedger } from "../../../../dist/src/lib/observability/analytics.js";
+import { getRunLedgerStore } from "../../../../dist/src/lib/observability/runLedger";
+import { summarizeLedger } from "../../../../dist/src/lib/observability/analytics";
 
 function clampNum(val: unknown, min: number, max: number, def: number): number {
   if (val == null || val === "") return def;

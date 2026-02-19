@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { route } from "./router.js";
+import { route, estimateTokensForTask } from "./router.js";
 import type { TaskCard, ModelSpec } from "./types.js";
 
 function makeModel(id: string, inPer1k: number, outPer1k: number, expertise: number): ModelSpec {
@@ -68,5 +68,27 @@ describe("router.route with enforceCheapestViable (cheapestViableChosen)", () =>
     });
     expect(result.chosenModelId).toBe("cheap");
     expect(result.routingAudit?.rankedBy).toBe("score");
+  });
+});
+
+describe("estimateTokensForTask", () => {
+  const task: TaskCard = { id: "t1", taskType: "code", difficulty: "medium" };
+
+  it("uses fallback when directive is short (< 800 total tokens)", () => {
+    const short = "Implement CSV parser";
+    const out = estimateTokensForTask(task, short);
+    const total = out.input + out.output;
+    expect(total).toBeGreaterThanOrEqual(800);
+    expect(out.input).toBeGreaterThanOrEqual(500);
+    expect(out.output).toBeGreaterThanOrEqual(300);
+  });
+
+  it("uses directive-based estimate when directive is long enough", () => {
+    const long = "x".repeat(4000);
+    const out = estimateTokensForTask(task, long);
+    const total = out.input + out.output;
+    expect(total).toBeGreaterThanOrEqual(800);
+    expect(out.input).toBeLessThanOrEqual(6000);
+    expect(out.output).toBeLessThanOrEqual(2500);
   });
 });
