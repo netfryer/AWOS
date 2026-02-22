@@ -142,6 +142,23 @@ export default function DemoPage() {
     }
   }, []);
 
+  const fetchBundleWithLedger = useCallback(
+    async (sid: string): Promise<{ ledgerSummary: ReturnType<typeof buildLedgerSummary>; rawLedger: unknown } | null> => {
+      try {
+        const res = await fetch(`/api/projects/run-bundle?id=${encodeURIComponent(sid)}`);
+        const data = await res.json();
+        if (!res.ok || !data.bundle?.ledger) return null;
+        return {
+          ledgerSummary: buildLedgerSummary(data.bundle.ledger),
+          rawLedger: data.bundle.ledger,
+        };
+      } catch {
+        return null;
+      }
+    },
+    []
+  );
+
   const request: RunScenarioRequest = {
     presetId: presetId ?? undefined,
     projectBudgetUSD,
@@ -233,11 +250,15 @@ export default function DemoPage() {
 
           if (status === "completed") {
             const partial = sdata.session?.progress?.partialResult ?? sdata.session;
-            const ledger = await fetchLedgerFromBundle(sid);
+            const bundleData = await fetchBundleWithLedger(sid);
+            const ledger = bundleData?.ledgerSummary ?? null;
             const deliverable = extractDeliverableOutput(partial?.runs);
             const mergedResponse: RunScenarioSuccessResponse = {
               ...successData,
               result: partial,
+              bundle: bundleData?.rawLedger
+                ? { ...successData.bundle, ledger: bundleData.rawLedger }
+                : successData.bundle,
             };
             setFullResponse(mergedResponse);
             persistLastRun(request, mergedResponse);
@@ -270,9 +291,9 @@ export default function DemoPage() {
       setError(msg);
       setState((s) => ({ ...s, status: "failed" }));
     }
-  }, [presetId, projectBudgetUSD, tierProfile, concurrencyWorker, concurrencyQa, asyncMode, fetchLedgerFromBundle]);
+  }, [presetId, projectBudgetUSD, tierProfile, concurrencyWorker, concurrencyQa, asyncMode, fetchLedgerFromBundle, fetchBundleWithLedger]);
 
-  const loadLastRunHandler = useCallback(() => {
+  const loadLastRunHandler = useCallback(async () => {
     const stored = loadLastRun();
     if (!stored) return;
     const req = stored.request;
@@ -287,6 +308,10 @@ export default function DemoPage() {
     setError(null);
     if (!isRunScenarioError(resp)) {
       const s = resp as RunScenarioSuccessResponse;
+      let ledger = s.bundle?.ledger ? buildLedgerSummary(s.bundle.ledger) : null;
+      if (!ledger && s.runSessionId) {
+        ledger = await fetchLedgerFromBundle(s.runSessionId);
+      }
       setState({
         presetId: req.presetId ?? null,
         status: "completed",
@@ -294,11 +319,11 @@ export default function DemoPage() {
         plan: s.plan ?? null,
         packages: s.packages ?? [],
         result: s.result ?? null,
-        ledger: s.bundle?.ledger ? buildLedgerSummary(s.bundle.ledger) : null,
+        ledger,
         deliverable: s.result ? extractDeliverableOutput(s.result.runs) ?? undefined : undefined,
       });
     }
-  }, []);
+  }, [fetchLedgerFromBundle]);
 
   const routeDecisions =
     state.ledger?.decisions?.filter((d) => d.type === "ROUTE") ?? [];

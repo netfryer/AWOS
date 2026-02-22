@@ -27,53 +27,87 @@ export const AGGREGATION_REPORT_BANNED_PHRASES = [
 /** Required top-level keys in the JSON report. */
 export const AGGREGATION_REPORT_REQUIRED_KEYS = ["summary", "aggregations"] as const;
 
-/**
- * Attempts to extract a JSON object from worker output.
- * Looks for ```json blocks first, then bare { ... }.
- */
-function extractJsonFromOutput(text: string): { ok: true; obj: unknown } | { ok: false; reason: string } {
-  const trimmed = text.trim();
-  if (!trimmed) return { ok: false, reason: "Output is empty" };
+/** Extracts all JSON objects from output: fenced ```json blocks and brace-balanced inline/trailing objects. */
+function extractAllJsonObjects(text: string): unknown[] {
+  const results: unknown[] = [];
+  const seen = new Set<string>();
 
-  // Try ```json ... ``` block first
-  const jsonBlockMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonBlockMatch) {
+  function tryAdd(obj: unknown): void {
     try {
-      const obj = JSON.parse(jsonBlockMatch[1].trim());
-      return { ok: true, obj };
+      const key = JSON.stringify(obj);
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (typeof obj === "object" && obj !== null && !Array.isArray(obj)) {
+        results.push(obj);
+      }
     } catch {
-      // Fall through to try raw JSON
+      // skip
     }
   }
 
-  // Try to find a top-level JSON object (brace-balanced)
+  // 1. Fenced ```json blocks
+  const jsonBlockRe = /```(?:json)?\s*([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = jsonBlockRe.exec(text)) !== null) {
+    const raw = m[1].trim();
+    if (!raw) continue;
+    try {
+      const obj = JSON.parse(raw);
+      tryAdd(obj);
+    } catch {
+      // try parsing as multiple objects or partial
+      const objs = extractBraceBalancedObjects(raw);
+      for (const o of objs) tryAdd(o);
+    }
+  }
+
+  // 2. Brace-balanced objects in the full text
+  const objs = extractBraceBalancedObjects(text);
+  for (const o of objs) tryAdd(o);
+
+  return results;
+}
+
+function extractBraceBalancedObjects(text: string): unknown[] {
+  const results: unknown[] = [];
   let depth = 0;
   let start = -1;
-  for (let i = 0; i < trimmed.length; i++) {
-    const c = trimmed[i];
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
     if (c === "{") {
       if (depth === 0) start = i;
       depth++;
     } else if (c === "}") {
       depth--;
       if (depth === 0 && start >= 0) {
-        const slice = trimmed.slice(start, i + 1);
+        const slice = text.slice(start, i + 1);
         try {
-          const obj = JSON.parse(slice);
-          return { ok: true, obj };
+          results.push(JSON.parse(slice));
         } catch {
-          // Try next object
+          // skip
         }
       }
     }
   }
+  return results;
+}
 
-  return { ok: false, reason: "No parseable JSON object found in output" };
+function isSelfConfidenceOnly(obj: unknown): boolean {
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return false;
+  const keys = Object.keys(obj as Record<string, unknown>);
+  return keys.length === 1 && keys[0] === "selfConfidence" && typeof (obj as Record<string, unknown>).selfConfidence === "number";
+}
+
+function hasRequiredKeys(obj: unknown): obj is Record<string, unknown> {
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return false;
+  const keys = Object.keys(obj as Record<string, unknown>);
+  return AGGREGATION_REPORT_REQUIRED_KEYS.every((k) => keys.includes(k));
 }
 
 /**
  * Validates aggregation-report worker output.
- * Checks: valid JSON, required keys (summary, aggregations), no banned phrases.
+ * Extracts all JSON objects, ignores { selfConfidence }, picks first with summary+aggregations.
+ * Checks: no banned phrases, at least one valid report object.
  */
 export function validateAggregationReportOutput(output: string): OutputValidationResult {
   const defects: string[] = [];
@@ -86,29 +120,25 @@ export function validateAggregationReportOutput(output: string): OutputValidatio
     }
   }
 
-  // 2. Parse JSON
-  const extracted = extractJsonFromOutput(output);
-  if (!extracted.ok) {
-    defects.push(`JSON validation failed: ${extracted.reason}`);
-    return { pass: defects.length === 0, defects };
-  }
+  // 2. Extract all JSON objects; ignore { selfConfidence }; pick first with required keys
+  const candidates = extractAllJsonObjects(output);
+  const report = candidates.find(
+    (o) => !isSelfConfidenceOnly(o) && hasRequiredKeys(o)
+  ) as Record<string, unknown> | undefined;
 
-  const obj = extracted.obj;
-  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
-    defects.push("JSON root must be an object, not array or primitive");
-    return { pass: false, defects };
-  }
-
-  const keys = Object.keys(obj as Record<string, unknown>);
-
-  // 3. Required keys
-  for (const required of AGGREGATION_REPORT_REQUIRED_KEYS) {
-    if (!keys.includes(required)) {
-      defects.push(`JSON report missing required key: "${required}"`);
+  if (!report) {
+    const hasAny = candidates.length > 0;
+    const onlySelfConf = candidates.every(isSelfConfidenceOnly);
+    if (!hasAny) {
+      defects.push("No parseable JSON object found in output");
+    } else if (onlySelfConf) {
+      defects.push("JSON report missing required keys: \"summary\" and \"aggregations\"");
+    } else {
+      defects.push("No JSON object with required keys \"summary\" and \"aggregations\" found");
     }
   }
 
-  // 4. Code blocks present when output suggests full deliverable (integration)
+  // 3. Code blocks present when output suggests full deliverable (integration)
   if (output.length > 800 && !/```[\s\S]*?```/.test(output)) {
     defects.push("Full deliverable should include at least one code block (```...```)");
   }

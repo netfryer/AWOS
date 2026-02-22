@@ -72,6 +72,27 @@ Minimal Node/TS code would go here.
     expect(r.pass).toBe(false);
     expect(r.defects.length).toBeGreaterThan(0);
   });
+
+  it("passes when report JSON appears before selfConfidence trailer", () => {
+    const output = `# Report
+
+\`\`\`json
+{"summary":{"total":10},"aggregations":[{"name":"count","value":10}]}
+\`\`\`
+
+Some narrative. At the end:
+{"selfConfidence":0.95}`;
+    const r = validateAggregationReportOutput(output);
+    expect(r.pass).toBe(true);
+    expect(r.defects).toHaveLength(0);
+  });
+
+  it("passes when report and selfConfidence are in same object", () => {
+    const output = '{"summary":{},"aggregations":[],"selfConfidence":0.9}';
+    const r = validateAggregationReportOutput(output);
+    expect(r.pass).toBe(true);
+    expect(r.defects).toHaveLength(0);
+  });
 });
 
 describe("runOutputValidator", () => {

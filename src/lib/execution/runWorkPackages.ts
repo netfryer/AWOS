@@ -17,7 +17,7 @@ import type { ModelSpec, TaskCard, TaskType, Difficulty } from "../../types.js";
 import type { TrustTracker } from "../governance/trustTracker.js";
 import type { LlmTextExecuteResult } from "../llm/llmTextExecute.js";
 import { InMemoryArtifactRegistry } from "./artifactRegistry.js";
-import { runOutputValidator } from "./outputValidators.js";
+import { runOutputValidator, AGGREGATION_REPORT_BANNED_PHRASES } from "./outputValidators.js";
 import { isAllowedCommand } from "./qaAllowlist.js";
 import type { RunLedgerStore } from "../observability/runLedger.js";
 import type { PortfolioRecommendation } from "../governance/portfolioOptimizer.js";
@@ -164,6 +164,124 @@ function buildWorkerDirectiveForTokenEstimate(pkg: {
   }
   return parts.join("\n");
 }
+
+const DEPENDENCY_ARTIFACT_CAP_PER = 6_000;
+const DEPENDENCY_ARTIFACT_CAP_TOTAL = 18_000;
+const INPUT_VALUE_CAP = 2_000;
+
+/** Format a single input value for prompt display; bounded and deterministic. */
+function formatInputValue(val: unknown): string {
+  if (val === null || val === undefined) return String(val);
+  if (typeof val === "string") return val.length > INPUT_VALUE_CAP ? val.slice(0, INPUT_VALUE_CAP) + " (truncated)" : val;
+  if (typeof val === "number" || typeof val === "boolean") return String(val);
+  try {
+    const s = JSON.stringify(val);
+    return s.length > INPUT_VALUE_CAP ? s.slice(0, INPUT_VALUE_CAP) + " (truncated)" : s;
+  } catch {
+    return String(val);
+  }
+}
+
+/** Build dependency artifacts text from registry; never throws. Caps per-dep and total. */
+function buildDependencyArtifactsText(
+  pkg: { dependencies: string[] },
+  registry: { getArtifactByPackageId(packageId: string): { content: string } | undefined }
+): string {
+  if (!pkg.dependencies?.length) return "";
+  const sections: string[] = [];
+  let totalChars = 0;
+  for (const depId of pkg.dependencies) {
+    if (totalChars >= DEPENDENCY_ARTIFACT_CAP_TOTAL) break;
+    let content: string;
+    try {
+      const artifact = registry.getArtifactByPackageId(depId);
+      content = artifact?.content ?? "(missing artifact)";
+    } catch {
+      content = "(missing artifact)";
+    }
+    const capped = content.length > DEPENDENCY_ARTIFACT_CAP_PER
+      ? content.slice(0, DEPENDENCY_ARTIFACT_CAP_PER) + " (truncated)"
+      : content;
+    const remaining = DEPENDENCY_ARTIFACT_CAP_TOTAL - totalChars;
+    const toAdd = capped.slice(0, remaining);
+    if (toAdd.length > 0) {
+      sections.push(`--- ${depId} ---\n${toAdd}`);
+      totalChars += toAdd.length;
+    }
+  }
+  return sections.length === 0 ? "" : sections.join("\n\n");
+}
+
+/**
+ * Build the worker prompt from package metadata, optional inputs, and optional dependency outputs.
+ * Pure helper; caller fetches artifacts and passes dependencyArtifactsText.
+ */
+export function buildWorkerPrompt(
+  pkg: {
+    id: string;
+    name: string;
+    description?: string;
+    acceptanceCriteria: string[];
+    inputs?: Record<string, unknown>;
+  },
+  dependencyArtifactsText?: string
+): string {
+  const acceptanceBlock = pkg.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n");
+  const aggregationReportConstraints =
+    pkg.id === "aggregation-report"
+      ? `
+
+CRITICAL: Do not fabricate input datasets unless input data is explicitly provided.
+- Define the input CSV interface (columns, format).
+- Describe the aggregation algorithm.
+- Output a JSON report schema and minimal runnable Node/TS implementation (this repo is TypeScript).
+
+You MUST include a REPORT_JSON block. This block must be present and must contain the required keys: "summary" and "aggregations". Format:
+
+REPORT_JSON:
+\`\`\`json
+{ "summary": { ... }, "aggregations": [ ... ] }
+\`\`\`
+
+Place your report JSON in a fenced \`\`\`json block under a line starting with REPORT_JSON:. You may add an optional example section elsewhere, clearly labeled as example only.
+
+Do not include these exact phrases anywhere in your output (even in negation): ${AGGREGATION_REPORT_BANNED_PHRASES.map((p) => `"${p}"`).join(", ")}`
+      : "";
+
+  const useDependencyInstruction =
+    pkg.id === "aggregation-report" && dependencyArtifactsText
+      ? `
+
+IMPORTANT: Use the provided dependency outputs below. Do not invent missing code or made-up content.`
+      : "";
+
+  const parts: string[] = [
+    `Task: ${pkg.name}`,
+    pkg.description ? `Description: ${pkg.description}` : "",
+    "Acceptance criteria:",
+    acceptanceBlock,
+    aggregationReportConstraints,
+    useDependencyInstruction,
+  ].filter(Boolean);
+
+  if (pkg.inputs && typeof pkg.inputs === "object" && Object.keys(pkg.inputs).length > 0) {
+    const inputLines = Object.entries(pkg.inputs).map(
+      ([k, v]) => `- ${k}: ${formatInputValue(v)}`
+    );
+    parts.push("Inputs:\n" + inputLines.join("\n"));
+  }
+
+  if (dependencyArtifactsText) {
+    parts.push("Dependency outputs to use:\n" + dependencyArtifactsText);
+  }
+
+  parts.push(
+    "Produce your output artifact (text or JSON as appropriate). At the very end, append a single JSON line: {\"selfConfidence\":<0-1>}"
+  );
+
+  return parts.join("\n\n");
+}
+
 const DEFAULT_WORKER_CONCURRENCY = 3;
 const DEFAULT_QA_CONCURRENCY = 1;
 const WORKER_QA_LEAD_LIMIT = 2;
@@ -518,7 +636,8 @@ async function resolveModelsForRouting(
   importance: number | undefined,
   fallbackModels: ModelSpec[],
   ledger: RunLedgerStore | undefined,
-  runSessionId: string | undefined
+  runSessionId: string | undefined,
+  tierUnion?: ("cheap" | "standard" | "premium")[]
 ): Promise<{
   models: ModelSpec[];
   registryEntries?: import("../model-hr/types.js").ModelRegistryEntry[];
@@ -527,14 +646,26 @@ async function resolveModelsForRouting(
   procurementFiltered?: ProcurementFilteredEntry[];
 }> {
   let registryError: string | undefined;
+  const tiersToResolve = tierUnion ?? [tierProfile];
+  const fallbackTier = tierUnion && tierUnion.length > 1 ? "standard" : tierProfile;
   try {
-    const { eligible } = await listEligibleModels({
-      tierProfile,
-      taskType,
-      difficulty,
-      budgetRemainingUSD,
-      importance,
-    });
+    const seenIds = new Set<string>();
+    const eligible: import("../model-hr/types.js").ModelRegistryEntry[] = [];
+    for (const t of tiersToResolve) {
+      const { eligible: e } = await listEligibleModels({
+        tierProfile: t,
+        taskType,
+        difficulty,
+        budgetRemainingUSD,
+        importance,
+      });
+      for (const m of e) {
+        if (!seenIds.has(m.id)) {
+          seenIds.add(m.id);
+          eligible.push(m);
+        }
+      }
+    }
     if (eligible.length > 0) {
       const config = await getTenantConfig("default");
       const credentials = createEnvCredentialsResolver();
@@ -555,7 +686,7 @@ async function resolveModelsForRouting(
         };
       }
       recordRegistryFallback("procurement_no_eligible_models");
-      const models = filterModelsByTier(fallbackModels, tierProfile);
+      const models = filterModelsByTier(fallbackModels, fallbackTier);
       if (ledger && runSessionId) {
         ledger.recordDecision(runSessionId, {
           type: "PROCUREMENT_FALLBACK",
@@ -580,7 +711,7 @@ async function resolveModelsForRouting(
     registryError = e instanceof Error ? e.message : String(e);
   }
   recordRegistryFallback(registryError);
-  const models = filterModelsByTier(fallbackModels, tierProfile);
+  const models = filterModelsByTier(fallbackModels, fallbackTier);
   if (ledger && runSessionId) {
     ledger.recordDecision(runSessionId, {
       type: "BUDGET_OPTIMIZATION",
@@ -1073,6 +1204,10 @@ export async function runWorkPackages(
   while (readyWorkers.length > 0 || readyQA.length > 0) {
     const workerTierForResolve =
       readyWorkers.some((p) => p.tierProfileOverride != null) ? "standard" : currentTier;
+    const workerTierUnion =
+      readyWorkers.some((p) => p.tierProfileOverride != null)
+        ? [...new Set(readyWorkers.map((p) => p.tierProfileOverride ?? currentTier))]
+        : undefined;
     const {
       models: modelsByTier,
       registryEntries: workerRegistryEntries,
@@ -1087,7 +1222,8 @@ export async function runWorkPackages(
       3,
       ctx.modelRegistry,
       ctx.ledger,
-      ctx.runSessionId
+      ctx.runSessionId,
+      workerTierUnion
     );
 
     const workerLead = workerCompletedCount - qaCompletedCount;
@@ -1659,6 +1795,10 @@ Respond with ONLY a JSON object (no markdown, no extra text):
             : undefined;
         const effectiveTier = pkg.tierProfileOverride ?? currentTier;
         const useCheapestViable = pkg.cheapestViableChosen ?? enforceCheapestViable ?? false;
+        const routerConfig =
+          effectiveTier === "cheap"
+            ? { thresholds: { low: 0.55, medium: 0.65, high: 0.75 } as Record<string, number> }
+            : undefined;
         const workerRoutingOptions =
           workerRegistryEntries && workerRegistryEntries.length > 0
             ? await (async () => {
@@ -1679,7 +1819,7 @@ Respond with ONLY a JSON object (no markdown, no extra text):
         const routing = ctx.route(
           task,
           modelsByTier,
-          undefined,
+          routerConfig,
           buildWorkerDirectiveForTokenEstimate(pkg),
           workerPortfolioOpts,
           workerRoutingOptions
@@ -1763,25 +1903,8 @@ Respond with ONLY a JSON object (no markdown, no extra text):
           basePred += cal.qualityBias;
         }
         const predictedQuality = Math.max(0, Math.min(1, basePred));
-        const acceptanceBlock = pkg.acceptanceCriteria.map((c, i) => `${i + 1}. ${c}`).join("\n");
-        const aggregationReportConstraints =
-          pkg.id === "aggregation-report"
-            ? `
-
-CRITICAL: Do NOT invent sample data or placeholder datasets unless input data is explicitly provided.
-- Define the input CSV interface (columns, format).
-- Describe the aggregation algorithm.
-- Output a JSON report schema and minimal runnable Node/TS implementation (this repo is TypeScript).
-- Include a JSON object with required keys: "summary" and "aggregations". You may add an optional example section clearly labeled as example only.`
-            : "";
-        const prompt = `Task: ${pkg.name}
-${pkg.description ? `Description: ${pkg.description}` : ""}
-
-Acceptance criteria:
-${acceptanceBlock}
-${aggregationReportConstraints}
-
-Produce your output artifact (text or JSON as appropriate). At the very end, append a single JSON line: {"selfConfidence":<0-1>}`;
+        const dependencyArtifactsText = buildDependencyArtifactsText(pkg, registry);
+        const prompt = buildWorkerPrompt(pkg, dependencyArtifactsText || undefined);
 
         let execResult: LlmTextExecuteResult;
         try {
