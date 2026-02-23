@@ -6,6 +6,7 @@
   "main": "dist/router.js",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.74.0",
+    "archiver": "^7.0.1",
     "next": "^14.2.0",
     "openai": "^6.22.0",
     "react": "^18.2.0",
@@ -22,9 +23,16 @@
     "test:watch": "vitest",
     "model-hr:sync": "tsx scripts/model-hr/syncProviders.ts",
     "model-hr:canary": "tsx scripts/model-hr/canary.ts",
-    "model-hr:cycle": "tsx scripts/model-hr/cycle.ts"
+    "model-hr:cycle": "tsx scripts/model-hr/cycle.ts",
+    "calibration:tests": "tsx scripts/runCalibrationTests.ts",
+    "calibration:grid": "tsx scripts/runCalibrationGrid.ts",
+    "calibration:grid-writing": "tsx scripts/runCalibrationGridWriting.ts",
+    "policy:eval-batch": "tsx scripts/runPolicyEvalBatch.ts",
+    "policy:eval-ab": "tsx scripts/runPolicyEvalAB.ts",
+    "policy:eval-writing-focused": "tsx scripts/runPolicyEvalBatchWritingFocused.ts"
   },
   "devDependencies": {
+    "@types/archiver": "^7.0.0",
     "@types/node": "^20.10.0",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",

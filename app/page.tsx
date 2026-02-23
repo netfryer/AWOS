@@ -134,7 +134,7 @@ function formatCost(value: number): string {
 }
 
 export default function ChatPage() {
-  const [messages, setMessages] = useState<Message[]>(loadMessages);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [taskType, setTaskType] = useState<"code" | "writing" | "analysis" | "general">("code");
@@ -145,6 +145,10 @@ export default function ChatPage() {
   const [maxCostUSD, setMaxCostUSD] = useState("");
   const [jsonInput, setJsonInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setMessages(loadMessages());
+  }, []);
 
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });

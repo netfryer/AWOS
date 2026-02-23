@@ -26,6 +26,7 @@ import type {
   LastDemoRun,
   TierProfile,
 } from "./types";
+import { selectDeliveryStatus } from "./types";
 import { LAST_DEMO_RUN_KEY, isRunScenarioError } from "./types";
 import { getPresetById, PRESET_PIPELINE_HINTS } from "./presets";
 
@@ -45,16 +46,17 @@ function buildLedgerSummary(ledger: {
     (ledger.costs?.workerUSD ?? 0) +
     (ledger.costs?.qaUSD ?? 0) +
     (ledger.costs?.deterministicQaUSD ?? 0);
-  const routeDecisions = (ledger.decisions ?? []).filter((d) => d.type === "ROUTE");
+  const decisions = ledger.decisions ?? [];
+  const routeDecisions = decisions.filter((d) => d.type === "ROUTE").map((d) => ({
+    type: d.type,
+    packageId: d.details?.packageId,
+    chosenModelId: d.details?.chosenModelId,
+    compBreakdown: d.details?.compBreakdown,
+    routingCandidates: d.details?.routingCandidates,
+  }));
   return {
     costs: { totalUSD },
-    decisions: routeDecisions.map((d) => ({
-      type: d.type,
-      packageId: d.details?.packageId,
-      chosenModelId: d.details?.chosenModelId,
-      compBreakdown: d.details?.compBreakdown,
-      routingCandidates: d.details?.routingCandidates,
-    })),
+    decisions: [...routeDecisions, ...decisions.filter((d) => d.type === "ASSEMBLY" || d.type === "ASSEMBLY_FAILED")],
   };
 }
 
@@ -351,6 +353,10 @@ export default function DemoPage() {
   if ((state.result?.qaResults?.length ?? 0) > 0) completedSteps.push("qa");
   if (state.ledger) completedSteps.push("ledger");
   if (state.deliverable != null && state.deliverable !== "") completedSteps.push("delivery");
+  const deliveryStatus = selectDeliveryStatus(state.ledger?.decisions);
+  if (!completedSteps.includes("delivery") && deliveryStatus.status !== "not_started") {
+    completedSteps.push("delivery");
+  }
 
   const durationSeconds = startTime ? Math.round((Date.now() - startTime) / 1000) : undefined;
   const budget = state.result?.budget;
@@ -434,6 +440,7 @@ export default function DemoPage() {
         onCancel={asyncMode ? handleCancelPoll : undefined}
         investorMode={investorMode}
         pipelineHint={presetId ? PRESET_PIPELINE_HINTS[presetId] : undefined}
+        deliveryStatus={deliveryStatus}
       />
 
       {(state.status === "completed" || state.result) ? (
@@ -531,6 +538,8 @@ export default function DemoPage() {
 
       <DeliveryPreview
         deliverableOutput={typeof state.deliverable === "string" ? state.deliverable : null}
+        runSessionId={state.runSessionId}
+        deliveryStatus={deliveryStatus}
         mode="compact"
         title="Final deliverable"
         directive={getPresetById(presetId)?.directive}

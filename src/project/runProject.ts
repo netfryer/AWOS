@@ -9,7 +9,10 @@ import { createExecutor } from "../executor/index.js";
 import { mockExecutor } from "../executor/mockExecutor.js";
 import { DEMO_CONFIG } from "../demoModels.js";
 import { getModelRegistryForRuntime } from "../lib/model-hr/index.js";
+import { getAllComputed } from "../calibration/store.js";
+import { applyCalibration } from "../calibration/apply.js";
 import { getModelStatsTracker } from "../modelStats.js";
+import { getEvalSampleRateProd } from "../evalConfig.js";
 import { getVarianceStatsTracker } from "../varianceStats.js";
 import { decomposeDirective } from "./decomposer.js";
 import type {
@@ -97,12 +100,15 @@ export async function runProject(request: ProjectRequest): Promise<ProjectResult
     constraints,
   } = request;
   const { models: modelRegistry } = await getModelRegistryForRuntime();
+  const computed = await getAllComputed();
+  const calibratedRegistry = applyCalibration(modelRegistry, computed);
 
   const profileOverrides = getProfileConfigOverrides(profile);
   const config: Partial<RouterConfig> = {
     ...DEMO_CONFIG,
     ...profileOverrides,
     thresholds: { ...DEMO_CONFIG.thresholds, ...profileOverrides.thresholds },
+    evaluationSampleRate: getEvalSampleRateProd(),
   };
 
   const decomposed = await decomposeDirective(directive);
@@ -143,7 +149,7 @@ export async function runProject(request: ProjectRequest): Promise<ProjectResult
       },
     };
 
-    const filteredModels = filterModelsByTier(modelRegistry, d.recommendedTier);
+    const filteredModels = filterModelsByTier(calibratedRegistry, d.recommendedTier);
     const routing = route(task, filteredModels, config, subtask.description);
     const executor: Executor =
       routing.chosenModelId != null

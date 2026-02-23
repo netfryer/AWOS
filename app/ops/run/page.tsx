@@ -11,6 +11,39 @@ import {
   type Fixture,
 } from "../fixtures";
 
+const TEST_RUN_FIXTURES: Fixture[] = [
+  {
+    name: "Code (eval sometimes)",
+    description: "Single task: code, medium, fast profile — evaluator samples 25%",
+    payload: {
+      directive: "Write a JavaScript function that validates an email address with a regex and includes 3 example calls.",
+      taskType: "code",
+      difficulty: "medium",
+      profile: "fast",
+    },
+  },
+  {
+    name: "Writing (high expertise)",
+    description: "Single task: writing, high, strict — routes to higher writing expertise",
+    payload: {
+      directive: "Write a 200-word professional launch announcement for an AI productivity platform, with a headline and 3 bullet features.",
+      taskType: "writing",
+      difficulty: "high",
+      profile: "strict",
+    },
+  },
+  {
+    name: "Analysis (structured)",
+    description: "Single task: analysis, high, strict — exposes weak models over time",
+    payload: {
+      directive: "Provide a structured 8-bullet risk analysis of deploying autonomous AI agents in enterprise IT, with mitigations.",
+      taskType: "analysis",
+      difficulty: "high",
+      profile: "strict",
+    },
+  },
+];
+
 const SCENARIO_RUN_FIXTURES: Fixture[] = [
   {
     name: "CSV → JSON Stats CLI (preset)",
@@ -167,7 +200,7 @@ function parseJsonSafe(text: string): { ok: true; value: unknown } | { ok: false
   }
 }
 
-type JsonTestMode = "PlanRequest" | "PackageRequest" | "RunPackagesRequest" | "ScenarioRunRequest";
+type JsonTestMode = "PlanRequest" | "PackageRequest" | "RunPackagesRequest" | "ScenarioRunRequest" | "TestRunRequest";
 
 type AssertionId = "successTrue" | "noError" | "noCriticalUnderfundedWarning" | "hasPlanOrPackages" | "cheapestViableChosen";
 interface AssertionResult {
@@ -207,11 +240,18 @@ function runAssertions(
   const r = response as Record<string, unknown>;
 
   if (enabled.successTrue) {
-    const pass = r.success === true;
+    let pass: boolean;
+    if (mode === "TestRunRequest") {
+      pass = r.final?.status === "ok" && r.error == null;
+    } else {
+      pass = r.success === true;
+    }
     results.push({
       id: "successTrue",
       pass,
-      message: pass ? "response.success === true" : "response.success !== true",
+      message: pass
+        ? (mode === "TestRunRequest" ? "final.status === ok" : "response.success === true")
+        : (mode === "TestRunRequest" ? "final.status !== ok or error present" : "response.success !== true"),
     });
   }
   if (enabled.noError) {
@@ -238,6 +278,7 @@ function runAssertions(
     else if (mode === "PackageRequest") pass = Array.isArray(r.packages);
     else if (mode === "RunPackagesRequest") pass = r.result != null;
     else if (mode === "ScenarioRunRequest") pass = r.plan != null;
+    else if (mode === "TestRunRequest") pass = Array.isArray(r.attempts) || r.final != null;
     results.push({
       id: "hasPlanOrPackages",
       pass,
@@ -246,7 +287,7 @@ function runAssertions(
         : `expected field (plan/packages/result) missing for ${mode}`,
     });
   }
-  if (enabled.cheapestViableChosen && (mode === "RunPackagesRequest" || mode === "PackageRequest" || mode === "ScenarioRunRequest")) {
+  if (enabled.cheapestViableChosen && (mode === "RunPackagesRequest" || mode === "PackageRequest" || mode === "ScenarioRunRequest" || mode === "TestRunRequest")) {
     const routeDecisions = ledgerSummary?.decisions?.filter((d) => d.type === "ROUTE") ?? [];
     const withCandidates = routeDecisions.filter(
       (d) => Array.isArray(d.details?.routingCandidates) && d.details.routingCandidates.length > 0
@@ -583,7 +624,9 @@ export default function OpsRunPage() {
         ? PACKAGE_FIXTURES
         : jsonTestMode === "ScenarioRunRequest"
           ? SCENARIO_RUN_FIXTURES
-          : RUN_PACKAGES_FIXTURES;
+          : jsonTestMode === "TestRunRequest"
+            ? TEST_RUN_FIXTURES
+            : RUN_PACKAGES_FIXTURES;
 
   function loadFixture(fixture: Fixture) {
     setJsonTestInput(JSON.stringify(fixture.payload, null, 2));
@@ -629,6 +672,9 @@ export default function OpsRunPage() {
       const c = v.concurrency as { worker?: number; qa?: number } | undefined;
       if (c && typeof c.worker === "number") setConcurrencyWorker(c.worker);
       if (c && typeof c.qa === "number") setConcurrencyQa(c.qa);
+    } else if (jsonTestMode === "TestRunRequest") {
+      if (typeof v.directive === "string") setDirective(v.directive);
+      if (["low", "medium", "high"].includes(String(v.difficulty))) setDifficulty(v.difficulty as "low" | "medium" | "high");
     } else if (jsonTestMode === "ScenarioRunRequest") {
       if (typeof v.presetId === "string") setPresetId(v.presetId);
       else setPresetId("");
@@ -770,6 +816,37 @@ export default function OpsRunPage() {
         setPollStatus("failed");
         setLoading(null);
       }
+    } else if (jsonTestMode === "TestRunRequest") {
+      setLoading("run");
+      try {
+        const res = await fetch("/api/test/run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        runAssertionsAndStore(data);
+        if (!res.ok) throw new Error(data?.error ?? "Test run failed");
+        setRunResult({
+          runs: data.attempts?.map((a: { modelId: string; actualCostUSD?: number }) => ({
+            packageId: "task",
+            modelId: a.modelId,
+            actualCostUSD: a.actualCostUSD ?? 0,
+          })) ?? [],
+          qaResults: [],
+          escalations: [],
+          budget: data.actualCostUSD != null ? { startingUSD: 0, remainingUSD: 0 } : undefined,
+          warnings: [],
+        });
+        setJsonTestResponse(data);
+        setPollStatus("completed");
+        setLoading(null);
+        setActiveTab("run");
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Test run failed");
+        setPollStatus("failed");
+        setLoading(null);
+      }
     } else if (jsonTestMode === "ScenarioRunRequest") {
       setLoading("run");
       setPollStatus("idle");
@@ -875,6 +952,7 @@ export default function OpsRunPage() {
     if (jsonTestMode === "PackageRequest") return packagePayload;
     if (jsonTestMode === "RunPackagesRequest") return runPayload;
     if (jsonTestMode === "ScenarioRunRequest") return scenarioPayload;
+    if (jsonTestMode === "TestRunRequest") return { directive: "", taskType: "code", difficulty: "medium", profile: "fast" };
     return null;
   }
 
@@ -1006,6 +1084,7 @@ export default function OpsRunPage() {
                 <option value="PackageRequest">PackageRequest</option>
                 <option value="RunPackagesRequest">RunPackagesRequest</option>
                 <option value="ScenarioRunRequest">ScenarioRunRequest</option>
+                <option value="TestRunRequest">TestRunRequest</option>
               </select>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -1040,7 +1119,7 @@ export default function OpsRunPage() {
               setJsonTestInput(e.target.value);
               setJsonParseError(null);
             }}
-            placeholder={jsonTestMode === "PlanRequest" ? '{"directive":"...","projectBudgetUSD":5,"difficulty":"medium","estimateOnly":false,"includeCouncilDebug":false}' : jsonTestMode === "PackageRequest" ? '{"plan":{...},"directive":"...","includeCouncilAudit":false,"tierProfile":"standard","projectBudgetUSD":5}' : jsonTestMode === "ScenarioRunRequest" ? '{"directive":"...","projectBudgetUSD":5,"tierProfile":"standard","difficulty":"medium","estimateOnly":false,"includeCouncilAudit":false,"async":true,"concurrency":{"worker":3,"qa":1}}' : '{"packages":[...],"projectBudgetUSD":5,"tierProfile":"standard","concurrency":{"worker":3,"qa":1}}'}
+            placeholder={jsonTestMode === "PlanRequest" ? '{"directive":"...","projectBudgetUSD":5,"difficulty":"medium","estimateOnly":false,"includeCouncilDebug":false}' : jsonTestMode === "PackageRequest" ? '{"plan":{...},"directive":"...","includeCouncilAudit":false,"tierProfile":"standard","projectBudgetUSD":5}' : jsonTestMode === "ScenarioRunRequest" ? '{"directive":"...","projectBudgetUSD":5,"tierProfile":"standard","difficulty":"medium","estimateOnly":false,"includeCouncilAudit":false,"async":true,"concurrency":{"worker":3,"qa":1}}' : jsonTestMode === "TestRunRequest" ? '{"directive":"...","taskType":"code","difficulty":"medium","profile":"fast"}' : '{"packages":[...],"projectBudgetUSD":5,"tierProfile":"standard","concurrency":{"worker":3,"qa":1}}'}
             style={{ ...opsStyles.textarea, minHeight: 120 }}
             rows={6}
           />

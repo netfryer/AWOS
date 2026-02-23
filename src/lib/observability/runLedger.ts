@@ -5,7 +5,7 @@
 
 // ─── src/lib/observability/runLedger.ts ──────────────────────────────────────
 
-export type DecisionType = "ROUTE" | "AUDIT_PATCH" | "ESCALATION" | "BUDGET_OPTIMIZATION" | "MODEL_HR_SIGNAL" | "PROCUREMENT_FALLBACK";
+export type DecisionType = "ROUTE" | "AUDIT_PATCH" | "ESCALATION" | "BUDGET_OPTIMIZATION" | "MODEL_HR_SIGNAL" | "PROCUREMENT_FALLBACK" | "ASSEMBLY" | "ASSEMBLY_FAILED";
 
 export interface DecisionRecord {
   tsISO: string;

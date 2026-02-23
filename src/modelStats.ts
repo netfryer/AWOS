@@ -99,8 +99,14 @@ export class ModelStatsTracker {
       if (attempt.actualCostUSD != null) {
         entry.totalActualCostUSD += attempt.actualCostUSD;
       }
-      if (attempt.qualityScore != null) {
-        entry.totalQualityScore += attempt.qualityScore;
+      const evalOverall =
+        attempt.eval?.status === "ok" && typeof attempt.eval?.result?.overall === "number"
+          ? attempt.eval.result.overall
+          : null;
+      const legacyScore = attempt.qualityScore;
+      const scoreToUse = evalOverall ?? legacyScore;
+      if (scoreToUse != null) {
+        entry.totalQualityScore += scoreToUse;
         entry.evaluatedRuns += 1;
       }
     }

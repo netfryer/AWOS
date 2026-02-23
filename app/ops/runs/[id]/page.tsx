@@ -9,6 +9,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { opsStyles } from "../../styles";
 import { DeliveryPreview } from "../../demo/DeliveryPreview";
+import { selectDeliveryStatus } from "../../demo/types";
 
 interface RoutingCandidate {
   modelId: string;
@@ -199,6 +200,7 @@ export default function RunDetailPage() {
   const fullData = { bundle, session };
   const aggRun = result?.runs?.find((r) => r.packageId === "aggregation-report" || r.packageId?.includes("aggregation"));
   const deliverableOutput = aggRun?.output ?? null;
+  const deliveryStatus = selectDeliveryStatus(ledger?.decisions);
   const handleExportJson = useCallback(() => {
     const blob = new Blob([JSON.stringify(fullData, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -489,6 +491,8 @@ export default function RunDetailPage() {
       {/* 5) Delivery preview (when available) */}
       <DeliveryPreview
         deliverableOutput={deliverableOutput}
+        runSessionId={id}
+        deliveryStatus={deliveryStatus}
         mode="full"
         title="Delivery"
         onDownloadJson={handleExportJson}

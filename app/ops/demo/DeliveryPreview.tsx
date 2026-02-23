@@ -4,6 +4,7 @@
 "use client";
 
 import { useState } from "react";
+import type { DeliveryStatus } from "./types";
 import { demoStyles } from "./demoStyles";
 
 export interface DeliveryPreviewProps {
@@ -13,6 +14,10 @@ export interface DeliveryPreviewProps {
   mode?: "compact" | "full";
   /** Called when Download JSON is clicked. */
   onDownloadJson?: () => void;
+  /** Run session ID for Download ZIP. When set, enables ZIP download. */
+  runSessionId?: string | null;
+  /** Delivery status from ledger (ASSEMBLY/ASSEMBLY_FAILED). */
+  deliveryStatus?: DeliveryStatus;
   /** Title for the section. */
   title?: string;
   /** Optional CSS. */
@@ -58,21 +63,86 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+async function downloadZip(runSessionId: string): Promise<{ error?: string }> {
+  try {
+    const res = await fetch(`/api/ops/runs/${encodeURIComponent(runSessionId)}/deliverable`);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      const msg = data?.error?.message ?? `Download failed (${res.status})`;
+      return { error: msg };
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `deliverable-${runSessionId}.zip`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return {};
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "Download failed" };
+  }
+}
+
+function DeliveryStatusBadge({ status }: { status: DeliveryStatus }) {
+  if (status.status === "not_started") return null;
+  if (status.status === "assembled") {
+    return (
+      <span style={{ fontSize: 13, color: "#64748b", fontWeight: 500 }}>
+        Assembled{status.fileCount != null ? ` (${status.fileCount} files)` : ""}
+      </span>
+    );
+  }
+  if (status.status === "compile_verified") {
+    return (
+      <span style={{ fontSize: 13, color: "#15803d", fontWeight: 500 }}>
+        Compile verified{status.fileCount != null ? ` (${status.fileCount} files)` : ""}
+      </span>
+    );
+  }
+  if (status.status === "failed") {
+    return (
+      <span style={{ fontSize: 13, color: "#b91c1c", fontWeight: 500 }} title={status.error}>
+        Failed: {status.error}
+      </span>
+    );
+  }
+  return null;
+}
+
 export function DeliveryPreview({
   deliverableOutput,
   mode = "full",
   onDownloadJson,
+  runSessionId,
+  deliveryStatus,
   title = "Delivery Preview",
   style,
   directive,
 }: DeliveryPreviewProps) {
   const [expanded, setExpanded] = useState(false);
+  const [zipError, setZipError] = useState<string | null>(null);
+  const [zipLoading, setZipLoading] = useState(false);
   const previewLines = mode === "compact" ? PREVIEW_LINES_COMPACT : PREVIEW_LINES_FULL;
+
+  const handleDownloadZip = async () => {
+    if (!runSessionId) return;
+    setZipError(null);
+    setZipLoading(true);
+    const { error } = await downloadZip(runSessionId);
+    setZipLoading(false);
+    if (error) setZipError(error);
+  };
 
   if (!deliverableOutput || typeof deliverableOutput !== "string") {
     return (
       <section style={{ ...demoStyles.section, ...style }}>
-        <h2 style={demoStyles.sectionTitle}>{title}</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: directive ? 16 : 0 }}>
+          <h2 style={{ ...demoStyles.sectionTitle, marginBottom: 0 }}>{title}</h2>
+          {deliveryStatus && <DeliveryStatusBadge status={deliveryStatus} />}
+        </div>
         {directive && (
           <div
             style={{
@@ -91,6 +161,19 @@ export function DeliveryPreview({
             <div style={{ fontStyle: "italic" }}>{directive}</div>
           </div>
         )}
+        {runSessionId && (
+          <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 12, marginBottom: 16 }}>
+            <button
+              type="button"
+              disabled={zipLoading}
+              onClick={handleDownloadZip}
+              style={demoStyles.btnSecondary}
+            >
+              {zipLoading ? "Downloading…" : "Download ZIP"}
+            </button>
+            {zipError && <span style={{ fontSize: 13, color: "#b91c1c" }}>{zipError}</span>}
+          </div>
+        )}
         <div style={{ padding: 24, background: "#f8fafc", borderRadius: 8, fontSize: 14, color: "#64748b" }}>
           Run a scenario to see the AI-generated deliverable here. Output appears when a run completes.
         </div>
@@ -105,7 +188,10 @@ export function DeliveryPreview({
 
   return (
     <section style={{ ...demoStyles.section, ...style }}>
-      <h2 style={demoStyles.sectionTitle}>{title}</h2>
+      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: directive ? 16 : 0 }}>
+        <h2 style={{ ...demoStyles.sectionTitle, marginBottom: 0 }}>{title}</h2>
+        {deliveryStatus && <DeliveryStatusBadge status={deliveryStatus} />}
+      </div>
       {directive && (
         <div
           style={{
@@ -132,16 +218,16 @@ export function DeliveryPreview({
         )}
         <button
           type="button"
-          disabled
-          title="Download ZIP (coming soon)"
-          style={{
-            ...demoStyles.btnSecondary,
-            opacity: 0.6,
-            cursor: "not-allowed",
-          }}
+          disabled={!runSessionId || zipLoading}
+          onClick={handleDownloadZip}
+          title={runSessionId ? "Download deliverable as ZIP" : "Run session ID required"}
+          style={demoStyles.btnSecondary}
         >
-          Download ZIP
+          {zipLoading ? "Downloading…" : "Download ZIP"}
         </button>
+        {zipError && (
+          <span style={{ fontSize: 13, color: "#b91c1c" }}>{zipError}</span>
+        )}
       </div>
 
       <div style={{ position: "relative" }}>

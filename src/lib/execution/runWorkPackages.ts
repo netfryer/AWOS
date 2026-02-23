@@ -18,6 +18,7 @@ import type { TrustTracker } from "../governance/trustTracker.js";
 import type { LlmTextExecuteResult } from "../llm/llmTextExecute.js";
 import { InMemoryArtifactRegistry } from "./artifactRegistry.js";
 import { runOutputValidator, AGGREGATION_REPORT_BANNED_PHRASES } from "./outputValidators.js";
+import { assembleDeliverable, verifyAssemblyOutput, type AggregationArtifact } from "./assembleDeliverable.js";
 import { isAllowedCommand } from "./qaAllowlist.js";
 import type { RunLedgerStore } from "../observability/runLedger.js";
 import type { PortfolioRecommendation } from "../governance/portfolioOptimizer.js";
@@ -65,7 +66,12 @@ export interface RunWorkPackagesContext {
     config?: unknown,
     directive?: string,
     portfolioOptions?: { preferModelIds?: string[]; allowedModelIds?: string[] },
-    routingOptions?: { candidateScores?: Map<string, number>; candidateScoreBreakdowns?: Map<string, ModelScoreBreakdown>; cheapestViableChosen?: boolean }
+    routingOptions?: {
+      candidateScores?: Map<string, number>;
+      candidateScoreBreakdowns?: Map<string, ModelScoreBreakdown>;
+      cheapestViableChosen?: boolean;
+      priorsByModel?: Map<string, import("../model-hr/types.js").ModelPerformancePrior[]>;
+    }
   ) => {
     chosenModelId: string | null;
     expectedCostUSD: number | null;
@@ -182,6 +188,35 @@ function formatInputValue(val: unknown): string {
   }
 }
 
+/** Synthetic output when aggregation-report has missing dependency artifacts. Exported for tests. */
+export const AGGREGATION_REPORT_MISSING_DEPS_SYNTHETIC = JSON.stringify({
+  fileTree: [],
+  files: {},
+  report: { summary: "Dependency artifacts missing", aggregations: {} },
+});
+
+/** Returns dependency IDs with missing or empty artifacts. Never throws. Exported for tests. */
+export function getMissingDependencyIds(
+  pkg: { dependencies: string[] },
+  registry: { getArtifactByPackageId(packageId: string): { content: string } | undefined }
+): string[] {
+  if (!pkg.dependencies?.length) return [];
+  const missing: string[] = [];
+  for (const depId of pkg.dependencies) {
+    try {
+      const artifact = registry.getArtifactByPackageId(depId);
+      const content = artifact?.content ?? "";
+      const trimmed = String(content).trim();
+      if (trimmed.length === 0 || trimmed === "(missing artifact)") {
+        missing.push(depId);
+      }
+    } catch {
+      missing.push(depId);
+    }
+  }
+  return missing;
+}
+
 /** Build dependency artifacts text from registry; never throws. Caps per-dep and total. */
 function buildDependencyArtifactsText(
   pkg: { dependencies: string[] },
@@ -231,21 +266,37 @@ export function buildWorkerPrompt(
     pkg.id === "aggregation-report"
       ? `
 
-CRITICAL: Do not fabricate input datasets unless input data is explicitly provided.
-- Define the input CSV interface (columns, format).
-- Describe the aggregation algorithm.
-- Output a JSON report schema and minimal runnable Node/TS implementation (this repo is TypeScript).
+CRITICAL: Output ONLY a single valid JSON object. No markdown. No code fences. No explanatory prose. No example or sample sections. No placeholder language. Do not wrap in backticks. Output only the JSON object, parseable by JSON.parse without modification.
 
-You MUST include a REPORT_JSON block. This block must be present and must contain the required keys: "summary" and "aggregations". Format:
+Required schema (output this exact structure and nothing else):
 
-REPORT_JSON:
-\`\`\`json
-{ "summary": { ... }, "aggregations": [ ... ] }
-\`\`\`
+{
+  "fileTree": ["<path1>", "<path2>", ...],
+  "files": {
+    "<relative/path>": "<file contents>"
+  },
+  "report": {
+    "summary": "<string>",
+    "aggregations": <object>
+  }
+}
 
-Place your report JSON in a fenced \`\`\`json block under a line starting with REPORT_JSON:. You may add an optional example section elsewhere, clearly labeled as example only.
+REQUIRED FILES (output MUST include exactly these paths in fileTree and files):
+- package.json (must include scripts: "build": "tsc", "start": "node dist/index.js")
+- tsconfig.json
+- src/parser.ts
+- src/stats.ts
+- src/cli.ts
+- src/index.ts
+- README.md
 
-Do not include these exact phrases anywhere in your output (even in negation): ${AGGREGATION_REPORT_BANNED_PHRASES.map((p) => `"${p}"`).join(", ")}`
+Constraints:
+- fileTree must list exactly every key in files (exact match).
+- files must contain runnable Node/TypeScript source code. All content must be complete and non-placeholder.
+- report must contain both required keys: summary and aggregations.
+- Do not fabricate input datasets unless input data is explicitly provided.
+- Do NOT include markdown fences or any text outside the JSON object.
+- Do not include these exact phrases anywhere (even in negation): ${AGGREGATION_REPORT_BANNED_PHRASES.map((p) => `"${p}"`).join(", ")}`
       : "";
 
   const useDependencyInstruction =
@@ -275,9 +326,11 @@ IMPORTANT: Use the provided dependency outputs below. Do not invent missing code
     parts.push("Dependency outputs to use:\n" + dependencyArtifactsText);
   }
 
-  parts.push(
-    "Produce your output artifact (text or JSON as appropriate). At the very end, append a single JSON line: {\"selfConfidence\":<0-1>}"
-  );
+  const closingInstruction =
+    pkg.id === "aggregation-report"
+      ? "Output only the JSON object. Do not append selfConfidence or any other content."
+      : "Produce your output artifact (text or JSON as appropriate). At the very end, append a single JSON line: {\"selfConfidence\":<0-1>}";
+  parts.push(closingInstruction);
 
   return parts.join("\n\n");
 }
@@ -1341,17 +1394,34 @@ export async function runWorkPackages(
             const qaRoutingOptions =
               qaRegistryEntries && qaRegistryEntries.length > 0
                 ? await (async () => {
-                    const { scores, breakdowns } = await computeCandidateScoresWithBreakdown(
-                      qaRegistryEntries,
-                      "analysis",
-                      "medium",
-                      currentTier,
-                      remainingUSD
-                    );
+                    const [{ scores, breakdowns }, priorsByModel] = await Promise.all([
+                      computeCandidateScoresWithBreakdown(
+                        qaRegistryEntries,
+                        "analysis",
+                        "medium",
+                        currentTier,
+                        remainingUSD
+                      ),
+                      (async () => {
+                        const map = new Map<string, import("../model-hr/types.js").ModelPerformancePrior[]>();
+                        await Promise.all(
+                          qaRegistryEntries!.map(async (e) => {
+                            try {
+                              const priors = await loadPriorsForModel(e.id);
+                              map.set(e.id, priors);
+                            } catch {
+                              map.set(e.id, []);
+                            }
+                          })
+                        );
+                        return map;
+                      })(),
+                    ]);
                     return {
                       candidateScores: scores,
                       candidateScoreBreakdowns: breakdowns,
                       cheapestViableChosen: enforceCheapestViable ?? false,
+                      priorsByModel,
                     };
                   })()
                 : undefined;
@@ -1546,17 +1616,34 @@ Respond with ONLY a JSON object (no markdown, no extra text):
           const qaRoutingOptions =
             qaRegistryEntries && qaRegistryEntries.length > 0
               ? await (async () => {
-                  const { scores, breakdowns } = await computeCandidateScoresWithBreakdown(
-                    qaRegistryEntries,
-                    "analysis",
-                    "medium",
-                    currentTier,
-                    remainingUSD
-                  );
+                  const [{ scores, breakdowns }, priorsByModel] = await Promise.all([
+                    computeCandidateScoresWithBreakdown(
+                      qaRegistryEntries,
+                      "analysis",
+                      "medium",
+                      currentTier,
+                      remainingUSD
+                    ),
+                    (async () => {
+                      const map = new Map<string, import("../model-hr/types.js").ModelPerformancePrior[]>();
+                      await Promise.all(
+                        qaRegistryEntries!.map(async (e) => {
+                          try {
+                            const priors = await loadPriorsForModel(e.id);
+                            map.set(e.id, priors);
+                          } catch {
+                            map.set(e.id, []);
+                          }
+                        })
+                      );
+                      return map;
+                    })(),
+                  ]);
                   return {
                     candidateScores: scores,
                     candidateScoreBreakdowns: breakdowns,
                     cheapestViableChosen: enforceCheapestViable ?? false,
+                    priorsByModel,
                   };
                 })()
               : undefined;
@@ -1685,6 +1772,64 @@ Respond with ONLY a JSON object (no markdown, no extra text):
           }
         }
 
+        if (workerId === "aggregation-report" && qaParsed.pass && ctx.runSessionId) {
+          try {
+            const parsed = JSON.parse(fullWorkerOutput.trim()) as AggregationArtifact;
+            const result = await assembleDeliverable(ctx.runSessionId, parsed);
+            const verify = await verifyAssemblyOutput(result.outputDir);
+            if (!verify.success) {
+              const compilerErrors = (verify.error ?? verify.stderr ?? verify.stdout).trim();
+              qaParsed = {
+                pass: false,
+                qualityScore: 0.3,
+                defects: [
+                  "TypeScript compilation failed",
+                  ...(compilerErrors ? compilerErrors.split("\n").map((l) => l.trim()).filter(Boolean) : []),
+                ],
+              };
+              warnings.push(`aggregation-report TypeScript compilation failed: ${verify.error ?? "unknown"}`);
+              if (ctx.ledger) {
+                ctx.ledger.recordDecision(ctx.runSessionId, {
+                  type: "ASSEMBLY",
+                  packageId: workerId,
+                  details: {
+                    outputDir: result.outputDir,
+                    fileCount: result.fileCount,
+                    compilationSuccess: false,
+                    compilerStderr: verify.stderr,
+                    compilerStdout: verify.stdout,
+                  },
+                });
+              }
+            } else {
+              if (ctx.ledger) {
+                ctx.ledger.recordDecision(ctx.runSessionId, {
+                  type: "ASSEMBLY",
+                  packageId: workerId,
+                  details: { outputDir: result.outputDir, fileCount: result.fileCount, compilationSuccess: true },
+                });
+              }
+              console.log(`[runWorkPackages] Assembly completed for ${workerId}: ${result.fileCount} files -> ${result.outputDir}`);
+            }
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            qaParsed = {
+              pass: false,
+              qualityScore: 0.3,
+              defects: [...(qaParsed.defects ?? []), `Assembly failed: ${msg}`],
+            };
+            warnings.push(`aggregation-report assembly failed: ${msg}`);
+            if (ctx.ledger) {
+              ctx.ledger.recordDecision(ctx.runSessionId!, {
+                type: "ASSEMBLY_FAILED",
+                packageId: workerId,
+                details: { error: msg },
+              });
+            }
+            console.error(`[runWorkPackages] Assembly failed for ${workerId}:`, e);
+          }
+        }
+
         const outcome: QATaskOutcome = {
           type: "qa",
           packageId: pkg.id,
@@ -1802,17 +1947,34 @@ Respond with ONLY a JSON object (no markdown, no extra text):
         const workerRoutingOptions =
           workerRegistryEntries && workerRegistryEntries.length > 0
             ? await (async () => {
-                const { scores, breakdowns } = await computeCandidateScoresWithBreakdown(
-                  workerRegistryEntries,
-                  taskType,
-                  difficulty,
-                  effectiveTier,
-                  remainingUSD
-                );
+                const [{ scores, breakdowns }, priorsByModel] = await Promise.all([
+                  computeCandidateScoresWithBreakdown(
+                    workerRegistryEntries,
+                    taskType,
+                    difficulty,
+                    effectiveTier,
+                    remainingUSD
+                  ),
+                  (async () => {
+                    const map = new Map<string, import("../model-hr/types.js").ModelPerformancePrior[]>();
+                    await Promise.all(
+                      workerRegistryEntries!.map(async (e) => {
+                        try {
+                          const priors = await loadPriorsForModel(e.id);
+                          map.set(e.id, priors);
+                        } catch {
+                          map.set(e.id, []);
+                        }
+                      })
+                    );
+                    return map;
+                  })(),
+                ]);
                 return {
                   candidateScores: scores,
                   candidateScoreBreakdowns: breakdowns,
                   cheapestViableChosen: useCheapestViable,
+                  priorsByModel,
                 };
               })()
             : undefined;
@@ -1906,33 +2068,68 @@ Respond with ONLY a JSON object (no markdown, no extra text):
         const dependencyArtifactsText = buildDependencyArtifactsText(pkg, registry);
         const prompt = buildWorkerPrompt(pkg, dependencyArtifactsText || undefined);
 
-        let execResult: LlmTextExecuteResult;
-        try {
-          execResult = await ctx.llmTextExecute(modelId, prompt);
-        } catch (e) {
-          return { outcome: null, warning: `Package ${pkg.id} execution failed: ${e instanceof Error ? e.message : String(e)}` };
-        }
+        let output: string;
+        let actualCostUSD: number;
+        let isEstimatedCost: boolean;
 
-        const output = execResult.text;
+        if (pkg.id === "aggregation-report") {
+          const missingDeps = getMissingDependencyIds(pkg, registry);
+          if (missingDeps.length > 0) {
+            output = AGGREGATION_REPORT_MISSING_DEPS_SYNTHETIC;
+            actualCostUSD = 0;
+            isEstimatedCost = false;
+            const msg = `aggregation-report: dependency artifacts missing: ${missingDeps.join(", ")}`;
+            warnings.push(msg);
+            if (ctx.runSessionId && ctx.ledger) {
+              ctx.ledger.recordDecision(ctx.runSessionId, {
+                type: "ASSEMBLY_FAILED",
+                packageId: pkg.id,
+                details: { missingDependencies: missingDeps, reason: "dependency_artifacts_missing", error: msg },
+              });
+            }
+          } else {
+            let execResult: LlmTextExecuteResult;
+            try {
+              execResult = await ctx.llmTextExecute(modelId, prompt);
+            } catch (e) {
+              return { outcome: null, warning: `Package ${pkg.id} execution failed: ${e instanceof Error ? e.message : String(e)}` };
+            }
+            output = execResult.text;
+            if (model && execResult.usage?.totalTokens != null && execResult.usage.totalTokens > 0) {
+              const inT = execResult.usage.inputTokens ?? 0;
+              const outT = execResult.usage.outputTokens ?? 0;
+              actualCostUSD = inT > 0 || outT > 0
+                ? computeCost(model, inT || Math.round(execResult.usage.totalTokens * 0.6), outT || Math.round(execResult.usage.totalTokens * 0.4))
+                : computeCostFromTotal(model, execResult.usage.totalTokens);
+              isEstimatedCost = false;
+            } else {
+              actualCostUSD = model ? computeCost(model, estInputTokens, estOutputTokens) : predictedCostUSD;
+              isEstimatedCost = true;
+            }
+          }
+        } else {
+          let execResult: LlmTextExecuteResult;
+          try {
+            execResult = await ctx.llmTextExecute(modelId, prompt);
+          } catch (e) {
+            return { outcome: null, warning: `Package ${pkg.id} execution failed: ${e instanceof Error ? e.message : String(e)}` };
+          }
+          output = execResult.text;
+          if (model && execResult.usage?.totalTokens != null && execResult.usage.totalTokens > 0) {
+            const inT = execResult.usage.inputTokens ?? 0;
+            const outT = execResult.usage.outputTokens ?? 0;
+            actualCostUSD = inT > 0 || outT > 0
+              ? computeCost(model, inT || Math.round(execResult.usage.totalTokens * 0.6), outT || Math.round(execResult.usage.totalTokens * 0.4))
+              : computeCostFromTotal(model, execResult.usage.totalTokens);
+            isEstimatedCost = false;
+          } else {
+            actualCostUSD = model ? computeCost(model, estInputTokens, estOutputTokens) : predictedCostUSD;
+            isEstimatedCost = true;
+          }
+        }
         let selfConfidence: number | undefined;
         const confMatch = output.match(/\{"selfConfidence"\s*:\s*([\d.]+)\}/);
         if (confMatch) selfConfidence = Math.max(0, Math.min(1, parseFloat(confMatch[1])));
-
-        let actualCostUSD: number;
-        let isEstimatedCost: boolean;
-        if (model && execResult.usage?.totalTokens != null && execResult.usage.totalTokens > 0) {
-          const inT = execResult.usage.inputTokens ?? 0;
-          const outT = execResult.usage.outputTokens ?? 0;
-          if (inT > 0 || outT > 0) {
-            actualCostUSD = computeCost(model, inT || Math.round(execResult.usage.totalTokens * 0.6), outT || Math.round(execResult.usage.totalTokens * 0.4));
-          } else {
-            actualCostUSD = computeCostFromTotal(model, execResult.usage.totalTokens);
-          }
-          isEstimatedCost = false;
-        } else {
-          actualCostUSD = model ? computeCost(model, estInputTokens, estOutputTokens) : predictedCostUSD;
-          isEstimatedCost = true;
-        }
 
         const { artifactId, hash } = registry.createArtifact({
           packageId: pkg.id,

@@ -13,6 +13,36 @@ export interface DemoPreset {
 
 export type FlowStep = "plan" | "package" | "route" | "execute" | "qa" | "ledger" | "delivery";
 
+export type DeliveryStatus =
+  | { status: "not_started" }
+  | { status: "assembled"; fileCount?: number }
+  | { status: "compile_verified"; fileCount?: number }
+  | { status: "failed"; error: string };
+
+/** Derives delivery status from ledger decisions (ASSEMBLY, ASSEMBLY_FAILED). */
+export function selectDeliveryStatus(
+  decisions: Array<{ type: string; details?: Record<string, unknown> }> | undefined
+): DeliveryStatus {
+  if (!decisions?.length) return { status: "not_started" };
+  const failed = decisions.find((d) => d.type === "ASSEMBLY_FAILED");
+  if (failed) {
+    const err = failed.details?.error;
+    return { status: "failed", error: typeof err === "string" ? String(err).slice(0, 120) : "Assembly failed" };
+  }
+  const assembly = decisions.find((d) => d.type === "ASSEMBLY");
+  if (!assembly) return { status: "not_started" };
+  const comp = assembly.details?.compilationSuccess;
+  const fileCount = typeof assembly.details?.fileCount === "number" ? assembly.details.fileCount : undefined;
+  if (comp === true) return { status: "compile_verified", fileCount };
+  if (comp === false) {
+    const stderr = assembly.details?.compilerStderr;
+    const stdout = assembly.details?.compilerStdout;
+    const err = typeof stderr === "string" ? stderr : typeof stdout === "string" ? stdout : "Compilation failed";
+    return { status: "failed", error: String(err).slice(0, 120) };
+  }
+  return { status: "assembled", fileCount };
+}
+
 export type TierProfile = "cheap" | "standard" | "premium";
 
 export interface RunScenarioRequest {

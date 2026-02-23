@@ -1,11 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
-import { mockExecutor } from "../../../src/executor/mockExecutor";
+import { createExecutor } from "../../../src/executor/index";
 import { appendJsonl } from "../../../src/logger";
 import { validate } from "../../../src/validator";
 import { estimateTokensForTask } from "../../../src/router";
 import { DEMO_CONFIG } from "../../../src/demoModels";
 import { getModelRegistryForRuntime } from "../../../src/lib/model-hr/index";
+import { evaluateWithJudge } from "../../../src/evaluator/judgeEvaluator";
+import { recordEval } from "../../../src/calibration/store";
+import { getModelStatsTracker } from "../../../src/modelStats";
+import { getEvalSampleRateForce } from "../../../src/evalConfig";
 import type { TaskCard, TaskType, Difficulty, ModelSpec } from "../../../src/types";
 
 type Profile = "fast" | "strict" | "low_cost";
@@ -82,7 +86,8 @@ export async function POST(request: NextRequest) {
     const expectedCostUSD = computeExpectedCost(model, estimatedTokens);
 
     const prompt = buildPrompt(task, message);
-    const execution = await mockExecutor.execute({
+    const executor = createExecutor(modelId);
+    const execution = await executor.execute({
       task,
       modelId,
       prompt,
@@ -96,6 +101,35 @@ export async function POST(request: NextRequest) {
     const runId = randomUUID();
     const ts = new Date().toISOString();
     const finalStatus = execution.status === "ok" && validation.ok ? "ok" : "failed";
+
+    const sampleRate = getEvalSampleRateForce();
+    const shouldSample = execution.status === "ok" && validation.ok && Math.random() < sampleRate;
+
+    let evalObj: { status: "ok" | "skipped" | "error"; result?: unknown; error?: string; judgeModelId?: string; costUSD?: number } = { status: "skipped" };
+    if (shouldSample) {
+      try {
+        const evalResponse = await evaluateWithJudge({
+          taskType,
+          directive: message,
+          outputText: execution.outputText ?? "",
+        });
+        if (evalResponse.status === "ok" && evalResponse.result) {
+          evalObj = {
+            status: "ok",
+            result: evalResponse.result,
+            judgeModelId: process.env.JUDGE_MODEL_ID ?? "claude-sonnet-4-5-20250929",
+            costUSD: evalResponse.costUSD,
+          };
+          recordEval(modelId, taskType, evalResponse.result.overall).catch((err) =>
+            console.warn("Calibration recordEval failed:", err)
+          );
+        } else {
+          evalObj = { status: "error", error: evalResponse.error ?? "Evaluator failed" };
+        }
+      } catch (e) {
+        evalObj = { status: "error", error: e instanceof Error ? e.message : String(e) };
+      }
+    }
 
     const event = {
       runId,
@@ -119,6 +153,7 @@ export async function POST(request: NextRequest) {
           prompt,
           execution,
           validation,
+          eval: evalObj,
         },
       ],
       final: {
@@ -129,6 +164,9 @@ export async function POST(request: NextRequest) {
     };
 
     await appendJsonl("./runs/runs.jsonl", event);
+    await getModelStatsTracker().recordRun(event).catch((err) =>
+      console.warn("ModelStatsTracker.recordRun failed:", err)
+    );
     return NextResponse.json(event);
   } catch (err) {
     console.error("API /api/force-run error:", err);

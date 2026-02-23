@@ -3,7 +3,7 @@
 
 "use client";
 
-import type { FlowStep } from "./types";
+import type { FlowStep, DeliveryStatus } from "./types";
 import { demoStyles } from "./demoStyles";
 
 const STEPS: FlowStep[] = [
@@ -46,6 +46,8 @@ export interface ProgressStepperProps {
   investorMode?: boolean;
   /** Pipeline description for parallelism context, e.g. "Strategy → 3 workers (∥) → aggregation → QA" */
   pipelineHint?: string;
+  /** Delivery step status from ledger ASSEMBLY/ASSEMBLY_FAILED decisions */
+  deliveryStatus?: DeliveryStatus;
 }
 
 function getStepStatus(
@@ -60,6 +62,15 @@ function getStepStatus(
 
 const STEP_MIN_WIDTH = 100;
 
+function formatDeliveryLabel(status: DeliveryStatus | undefined, step: FlowStep): string {
+  if (step !== "delivery" || !status) return "";
+  if (status.status === "not_started") return " (not started)";
+  if (status.status === "assembled") return status.fileCount != null ? ` (${status.fileCount} files)` : "";
+  if (status.status === "compile_verified") return status.fileCount != null ? ` (${status.fileCount} files ✓)` : " (✓)";
+  if (status.status === "failed") return " (failed)";
+  return "";
+}
+
 export function ProgressStepper({
   currentStep,
   completedSteps,
@@ -69,6 +80,7 @@ export function ProgressStepper({
   onCancel,
   investorMode = true,
   pipelineHint,
+  deliveryStatus,
 }: ProgressStepperProps) {
   const stepStyle = (status: "pending" | "active" | "done") => ({
     ...demoStyles.flowStep,
@@ -129,10 +141,16 @@ export function ProgressStepper({
       <div style={{ ...demoStyles.flowRow, marginTop: 0, gap: 8 }}>
         {STEPS.map((step, i) => {
           const status = getStepStatus(step, currentStep, completedSteps);
+          const deliverySuffix = formatDeliveryLabel(deliveryStatus, step);
           return (
             <div key={step} style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={stepStyle(status)}>
                 {investorMode && STEP_ICONS[step]} {STEP_LABELS[step]}
+                {deliverySuffix && (
+                  <span style={{ fontSize: 12, fontWeight: 500, opacity: 0.9, marginLeft: 4 }}>
+                    {deliverySuffix}
+                  </span>
+                )}
               </span>
               {i < STEPS.length - 1 && <span style={demoStyles.flowArrow}>→</span>}
             </div>

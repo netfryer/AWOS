@@ -10,6 +10,12 @@ export interface OutputValidationResult {
   defects: string[];
 }
 
+export interface StructuredAggregationValidationResult {
+  pass: boolean;
+  defects: string[];
+  qualityScore: number;
+}
+
 /** Phrases that indicate placeholder/fabricated content; output fails if any appear. */
 export const AGGREGATION_REPORT_BANNED_PHRASES = [
   "let's assume",
@@ -24,94 +30,123 @@ export const AGGREGATION_REPORT_BANNED_PHRASES = [
   "hypothetical data",
 ] as const;
 
-/** Required top-level keys in the JSON report. */
+/** Required top-level keys for aggregation-report strict JSON schema. */
+export const AGGREGATION_REPORT_STRICT_KEYS = ["fileTree", "files", "report"] as const;
+
+/** Required keys inside report object. */
 export const AGGREGATION_REPORT_REQUIRED_KEYS = ["summary", "aggregations"] as const;
 
-/** Extracts all JSON objects from output: fenced ```json blocks and brace-balanced inline/trailing objects. */
-function extractAllJsonObjects(text: string): unknown[] {
-  const results: unknown[] = [];
-  const seen = new Set<string>();
+/** Required file paths for a compilable aggregation-report deliverable. */
+export const AGGREGATION_REPORT_REQUIRED_FILES = [
+  "package.json",
+  "tsconfig.json",
+  "src/parser.ts",
+  "src/stats.ts",
+  "src/cli.ts",
+  "src/index.ts",
+  "README.md",
+] as const;
 
-  function tryAdd(obj: unknown): void {
-    try {
-      const key = JSON.stringify(obj);
-      if (seen.has(key)) return;
-      seen.add(key);
-      if (typeof obj === "object" && obj !== null && !Array.isArray(obj)) {
-        results.push(obj);
-      }
-    } catch {
-      // skip
+/**
+ * Validates package.json content: devDependencies.typescript, scripts.build, scripts.start.
+ * Returns defects; empty array if valid.
+ */
+function validatePackageJsonContent(pkgJsonContent: string): string[] {
+  const defects: string[] = [];
+  let pkg: unknown;
+  try {
+    pkg = JSON.parse(pkgJsonContent);
+  } catch {
+    defects.push("package.json must be valid JSON");
+    return defects;
+  }
+  if (typeof pkg !== "object" || pkg === null || Array.isArray(pkg)) {
+    defects.push("package.json must be a JSON object");
+    return defects;
+  }
+  const obj = pkg as Record<string, unknown>;
+  const devDeps = obj.devDependencies;
+  if (typeof devDeps !== "object" || devDeps === null || Array.isArray(devDeps)) {
+    defects.push("package.json must include devDependencies");
+  } else if (!("typescript" in devDeps) || typeof (devDeps as Record<string, unknown>).typescript !== "string") {
+    defects.push("package.json devDependencies must include typescript");
+  }
+  const scripts = obj.scripts;
+  if (typeof scripts !== "object" || scripts === null || Array.isArray(scripts)) {
+    defects.push("package.json must include scripts");
+  } else {
+    if (!("build" in scripts) || typeof (scripts as Record<string, unknown>).build !== "string") {
+      defects.push("package.json scripts must include build");
+    }
+    if (!("start" in scripts) || typeof (scripts as Record<string, unknown>).start !== "string") {
+      defects.push("package.json scripts must include start");
     }
   }
-
-  // 1. Fenced ```json blocks
-  const jsonBlockRe = /```(?:json)?\s*([\s\S]*?)```/g;
-  let m: RegExpExecArray | null;
-  while ((m = jsonBlockRe.exec(text)) !== null) {
-    const raw = m[1].trim();
-    if (!raw) continue;
-    try {
-      const obj = JSON.parse(raw);
-      tryAdd(obj);
-    } catch {
-      // try parsing as multiple objects or partial
-      const objs = extractBraceBalancedObjects(raw);
-      for (const o of objs) tryAdd(o);
-    }
-  }
-
-  // 2. Brace-balanced objects in the full text
-  const objs = extractBraceBalancedObjects(text);
-  for (const o of objs) tryAdd(o);
-
-  return results;
+  return defects;
 }
 
-function extractBraceBalancedObjects(text: string): unknown[] {
-  const results: unknown[] = [];
-  let depth = 0;
-  let start = -1;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === "{") {
-      if (depth === 0) start = i;
-      depth++;
-    } else if (c === "}") {
-      depth--;
-      if (depth === 0 && start >= 0) {
-        const slice = text.slice(start, i + 1);
-        try {
-          results.push(JSON.parse(slice));
-        } catch {
-          // skip
-        }
-      }
-    }
-  }
-  return results;
-}
-
-function isSelfConfidenceOnly(obj: unknown): boolean {
+function hasStrictSchema(obj: unknown): obj is Record<string, unknown> {
   if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return false;
   const keys = Object.keys(obj as Record<string, unknown>);
-  return keys.length === 1 && keys[0] === "selfConfidence" && typeof (obj as Record<string, unknown>).selfConfidence === "number";
+  if (!AGGREGATION_REPORT_STRICT_KEYS.every((k) => keys.includes(k))) return false;
+  const o = obj as Record<string, unknown>;
+  if (!Array.isArray(o.fileTree)) return false;
+  if (typeof o.files !== "object" || o.files === null || Array.isArray(o.files)) return false;
+  const report = o.report;
+  if (typeof report !== "object" || report === null || Array.isArray(report)) return false;
+  const reportKeys = Object.keys(report as Record<string, unknown>);
+  if (!AGGREGATION_REPORT_REQUIRED_KEYS.every((k) => reportKeys.includes(k))) return false;
+  return true;
 }
 
-function hasRequiredKeys(obj: unknown): obj is Record<string, unknown> {
-  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) return false;
-  const keys = Object.keys(obj as Record<string, unknown>);
-  return AGGREGATION_REPORT_REQUIRED_KEYS.every((k) => keys.includes(k));
+function validateStrictAggregationReport(obj: Record<string, unknown>): string[] {
+  const defects: string[] = [];
+  const fileTree = obj.fileTree as unknown;
+  const files = obj.files as Record<string, unknown>;
+  const report = obj.report as Record<string, unknown>;
+
+  if (!Array.isArray(fileTree)) {
+    defects.push('"fileTree" must be an array of strings');
+  } else {
+    const fileKeys = new Set(Object.keys(files ?? {}));
+    const treeSet = new Set(fileTree.map((p) => String(p)));
+    for (const k of fileKeys) {
+      if (!treeSet.has(k)) defects.push(`fileTree missing path: "${k}"`);
+    }
+    for (const p of fileTree) {
+      const s = String(p);
+      if (!(s in (files ?? {}))) defects.push(`files missing entry for fileTree path: "${s}"`);
+    }
+    for (const req of AGGREGATION_REPORT_REQUIRED_FILES) {
+      if (!fileKeys.has(req)) {
+        defects.push(`Required file missing: "${req}"`);
+      }
+    }
+    const pkgJson = files?.["package.json"];
+    if (typeof pkgJson === "string") {
+      defects.push(...validatePackageJsonContent(pkgJson));
+    }
+  }
+
+  if (typeof report?.summary !== "string") {
+    defects.push('"report.summary" must be a string');
+  }
+  if (report?.aggregations == null || typeof report.aggregations !== "object") {
+    defects.push('"report.aggregations" must be an object');
+  }
+
+  return defects;
 }
 
 /**
  * Validates aggregation-report worker output.
- * Extracts all JSON objects, ignores { selfConfidence }, picks first with summary+aggregations.
- * Checks: no banned phrases, at least one valid report object.
+ * Expects a single strict JSON object: { fileTree, files, report }.
+ * No markdown, no code fences, no selfConfidence.
  */
 export function validateAggregationReportOutput(output: string): OutputValidationResult {
   const defects: string[] = [];
-  const lower = output.toLowerCase();
+  const trimmed = output.trim();
+  const lower = trimmed.toLowerCase();
 
   // 1. Banned phrases
   for (const phrase of AGGREGATION_REPORT_BANNED_PHRASES) {
@@ -120,32 +155,156 @@ export function validateAggregationReportOutput(output: string): OutputValidatio
     }
   }
 
-  // 2. Extract all JSON objects; ignore { selfConfidence }; pick first with required keys
-  const candidates = extractAllJsonObjects(output);
-  const report = candidates.find(
-    (o) => !isSelfConfidenceOnly(o) && hasRequiredKeys(o)
-  ) as Record<string, unknown> | undefined;
-
-  if (!report) {
-    const hasAny = candidates.length > 0;
-    const onlySelfConf = candidates.every(isSelfConfidenceOnly);
-    if (!hasAny) {
-      defects.push("No parseable JSON object found in output");
-    } else if (onlySelfConf) {
-      defects.push("JSON report missing required keys: \"summary\" and \"aggregations\"");
-    } else {
-      defects.push("No JSON object with required keys \"summary\" and \"aggregations\" found");
-    }
+  // 2. Reject code fences (output must be raw JSON only)
+  if (/```/.test(trimmed)) {
+    defects.push("Output must not contain code fences (```)");
   }
 
-  // 3. Code blocks present when output suggests full deliverable (integration)
-  if (output.length > 800 && !/```[\s\S]*?```/.test(output)) {
-    defects.push("Full deliverable should include at least one code block (```...```)");
+  // 3. Parse single JSON object
+  let obj: unknown;
+  try {
+    obj = JSON.parse(trimmed);
+  } catch {
+    defects.push("Output must be a single valid JSON object parseable by JSON.parse");
+    return { pass: defects.length === 0, defects };
   }
+
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+    defects.push("Output must be a JSON object, not array or primitive");
+    return { pass: defects.length === 0, defects };
+  }
+
+  const record = obj as Record<string, unknown>;
+
+  // 4. Strict schema
+  if (!hasStrictSchema(record)) {
+    defects.push(
+      'Output must have top-level keys: "fileTree" (string[]), "files" (object), "report" (object with "summary" and "aggregations")'
+    );
+    return { pass: defects.length === 0, defects };
+  }
+
+  defects.push(...validateStrictAggregationReport(record));
 
   return {
     pass: defects.length === 0,
     defects,
+  };
+}
+
+/**
+ * Validates a strict structured JSON artifact for aggregation-report.
+ * Entire output must be valid JSON conforming to { fileTree, files, report }.
+ * Returns pass, defects, and qualityScore (>= 0.85 if valid, <= 0.4 if invalid).
+ */
+export function validateStructuredAggregationArtifact(
+  output: string
+): StructuredAggregationValidationResult {
+  const defects: string[] = [];
+  const trimmed = output.trim();
+  const lower = trimmed.toLowerCase();
+
+  // 1. Banned phrases
+  for (const phrase of AGGREGATION_REPORT_BANNED_PHRASES) {
+    if (lower.includes(phrase.toLowerCase())) {
+      defects.push(`Output contains banned placeholder phrase: "${phrase}"`);
+    }
+  }
+
+  // 2. Reject markdown fences
+  if (/```/.test(trimmed)) {
+    defects.push("Output must not contain markdown code fences");
+  }
+
+  // 3. JSON.parse must succeed
+  let obj: unknown;
+  try {
+    obj = JSON.parse(trimmed);
+  } catch {
+    defects.push("Output must be valid JSON parseable by JSON.parse");
+    return { pass: false, defects, qualityScore: 0.4 };
+  }
+
+  if (typeof obj !== "object" || obj === null || Array.isArray(obj)) {
+    defects.push("Output must be a JSON object, not array or primitive");
+    return { pass: false, defects, qualityScore: 0.4 };
+  }
+
+  const record = obj as Record<string, unknown>;
+
+  // 4. Top-level shape
+  if (!AGGREGATION_REPORT_STRICT_KEYS.every((k) => k in record)) {
+    defects.push(
+      'Output must have top-level keys: "fileTree" (string[]), "files" (object), "report" (object with "summary" and "aggregations")'
+    );
+    return { pass: false, defects, qualityScore: 0.4 };
+  }
+
+  // 5. fileTree must be array of strings
+  const fileTree = record.fileTree;
+  if (!Array.isArray(fileTree)) {
+    defects.push('"fileTree" must be an array of strings');
+  } else {
+    for (let i = 0; i < fileTree.length; i++) {
+      if (typeof fileTree[i] !== "string") {
+        defects.push(`"fileTree"[${i}] must be a string`);
+      }
+    }
+  }
+
+  // 6. files must contain matching keys for each fileTree entry; fileTree must list every key in files
+  const files = record.files as Record<string, unknown> | null | undefined;
+  if (typeof files !== "object" || files === null || Array.isArray(files)) {
+    defects.push('"files" must be an object');
+  } else if (Array.isArray(fileTree)) {
+    const fileKeys = new Set(Object.keys(files));
+    const treeSet = new Set(fileTree.map((p) => String(p)));
+    for (const p of fileTree) {
+      const path = String(p);
+      if (!fileKeys.has(path)) {
+        defects.push(`"files" missing entry for fileTree path: "${path}"`);
+      }
+    }
+    for (const k of Object.keys(files)) {
+      if (!treeSet.has(k)) {
+        defects.push(`"fileTree" missing path: "${k}"`);
+      }
+    }
+    for (const req of AGGREGATION_REPORT_REQUIRED_FILES) {
+      if (!fileKeys.has(req)) {
+        defects.push(`Required file missing: "${req}"`);
+      }
+    }
+    const pkgJson = files["package.json"];
+    if (typeof pkgJson === "string") {
+      defects.push(...validatePackageJsonContent(pkgJson));
+    }
+  }
+
+  // 7. report.summary must exist and be string
+  const report = record.report as Record<string, unknown> | null | undefined;
+  if (typeof report !== "object" || report === null || Array.isArray(report)) {
+    defects.push('"report" must be an object');
+  } else {
+    if (!("summary" in report)) {
+      defects.push('"report.summary" must exist');
+    } else if (typeof report.summary !== "string") {
+      defects.push('"report.summary" must be a string');
+    }
+    if (!("aggregations" in report)) {
+      defects.push('"report.aggregations" must exist');
+    } else if (report.aggregations == null || typeof report.aggregations !== "object") {
+      defects.push('"report.aggregations" must be an object');
+    }
+  }
+
+  const pass = defects.length === 0;
+  const qualityScore = pass ? 0.85 : 0.4;
+
+  return {
+    pass,
+    defects,
+    qualityScore,
   };
 }
 
