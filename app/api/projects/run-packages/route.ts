@@ -14,6 +14,7 @@ import { getVarianceStatsTracker } from "../../../../src/varianceStats";
 import { getTrustTracker } from "../../../../src/lib/governance/trustTracker";
 import { llmTextExecute } from "../../../../src/lib/llm/llmTextExecute";
 import { getModelRegistryForRuntime } from "../../../../src/lib/model-hr/index";
+import { saveDemoRun, extractDeliverablesFromRuns } from "../../../lib/demoRunsStore";
 
 function validatePortfolioCoverage(
   portfolio: PortfolioRecommendation,
@@ -175,6 +176,7 @@ export async function POST(request: NextRequest) {
             const result = await runWorkPackages(runInput);
             ledgerStore.finalizeLedger(runSessionId, {
               completed: result.runs.length + result.qaResults.length,
+              roleExecutions: result.roleExecutions,
             });
             updateRunSession(runSessionId, {
               status: "completed",
@@ -184,6 +186,24 @@ export async function POST(request: NextRequest) {
                 runningPackages: 0,
                 warnings: result.warnings,
                 partialResult: result,
+              },
+            });
+            const deliverables = extractDeliverablesFromRuns(result.runs);
+            await saveDemoRun(runSessionId, {
+              runSessionId,
+              timestamp: new Date().toISOString(),
+              packages: body.packages,
+              result: {
+                runs: result.runs,
+                qaResults: result.qaResults,
+                escalations: result.escalations,
+                budget: result.budget,
+                warnings: result.warnings,
+                roleExecutions: result.roleExecutions,
+              },
+              deliverables: Object.keys(deliverables).length > 0 ? deliverables : undefined,
+              bundle: {
+                ledger: ledgerStore.getLedger(runSessionId) ?? undefined,
               },
             });
           } catch (e) {
@@ -266,6 +286,37 @@ export async function POST(request: NextRequest) {
     const result = await runWorkPackages(runInput);
     ledgerStore.finalizeLedger(runSessionId, {
       completed: result.runs.length + result.qaResults.length,
+      roleExecutions: result.roleExecutions,
+    });
+    // Create run session for sync so run-session returns result (run detail page)
+    createRunSession({
+      id: runSessionId,
+      status: "completed",
+      progress: {
+        totalPackages: body.packages.length,
+        completedPackages: result.runs.length + result.qaResults.length,
+        runningPackages: 0,
+        warnings: result.warnings,
+        partialResult: result,
+      },
+    });
+    const deliverables = extractDeliverablesFromRuns(result.runs);
+    await saveDemoRun(runSessionId, {
+      runSessionId,
+      timestamp: new Date().toISOString(),
+      packages: body.packages,
+      result: {
+        runs: result.runs,
+        qaResults: result.qaResults,
+        escalations: result.escalations,
+        budget: result.budget,
+        warnings: result.warnings,
+        roleExecutions: result.roleExecutions,
+      },
+      deliverables: Object.keys(deliverables).length > 0 ? deliverables : undefined,
+      bundle: {
+        ledger: ledgerStore.getLedger(runSessionId) ?? undefined,
+      },
     });
 
     return NextResponse.json({

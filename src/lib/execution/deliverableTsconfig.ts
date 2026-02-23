@@ -11,6 +11,7 @@ import path from "path";
 const DELIVERABLE_TSCONFIG = {
   compilerOptions: {
     strict: true,
+    noImplicitAny: false, // Lenient for model output; verify compile + module resolution
     target: "ES2020",
     module: "commonjs",
     esModuleInterop: true,

@@ -326,6 +326,17 @@ export function validateWorkPackages(packages: AtomicWorkPackage[]): void {
           `[packageWork] Package ${p.id}: QA outputs must include pass, qualityScore, defects`
         );
       }
+      if (p.dependencies.length !== 1) {
+        throw new Error(
+          `[packageWork] Package ${p.id}: QA package must have exactly 1 dependency, got ${p.dependencies.length}`
+        );
+      }
+      const depPkg = packages.find((x) => x.id === p.dependencies[0]);
+      if (!depPkg || depPkg.role !== "Worker") {
+        throw new Error(
+          `[packageWork] Package ${p.id}: QA dependency "${p.dependencies[0]}" must reference a Worker package`
+        );
+      }
     }
 
     if (p.qaPolicy != null && !isValidQaPolicy(p.qaPolicy)) {

@@ -18,7 +18,12 @@ import type { TrustTracker } from "../governance/trustTracker.js";
 import type { LlmTextExecuteResult } from "../llm/llmTextExecute.js";
 import { InMemoryArtifactRegistry } from "./artifactRegistry.js";
 import { runOutputValidator, AGGREGATION_REPORT_BANNED_PHRASES } from "./outputValidators.js";
-import { assembleDeliverable, verifyAssemblyOutput, type AggregationArtifact } from "./assembleDeliverable.js";
+import {
+  assembleDeliverable,
+  verifyAssemblyOutputNoEmit,
+  type AggregationArtifact,
+} from "./assembleDeliverable.js";
+import { getQaVerifyBuildMode } from "../governance/qaVerifyBuildConfig.js";
 import { isAllowedCommand } from "./qaAllowlist.js";
 import type { RunLedgerStore } from "../observability/runLedger.js";
 import type { PortfolioRecommendation } from "../governance/portfolioOptimizer.js";
@@ -120,6 +125,8 @@ export interface WorkerRun {
   isEstimatedCost?: boolean;
   artifactId?: string;
   artifactHash?: string;
+  /** Optional judge eval; when present, score prefers eval.result.overall over actualQuality. */
+  eval?: { result?: { overall?: number } };
 }
 
 export interface QAResult {
@@ -129,6 +136,20 @@ export interface QAResult {
   qualityScore: number;
   defects: string[];
   modelId: string;
+  /** Stage 7.1: Cost of QA execution (0 for deterministic-only). */
+  costUSD?: number;
+}
+
+/** Stage 7.1: Role execution record for RBEG. */
+export interface RoleExecutionRecord {
+  nodeId: string;
+  role: "ceo" | "executive" | "manager" | "worker" | "qa";
+  modelId?: string;
+  costUSD?: number;
+  score?: number;
+  status: "ok" | "retry" | "fail";
+  /** Optional failure reason (e.g. validation error message). */
+  notes?: string;
 }
 
 export interface RunPackagesResult {
@@ -137,6 +158,8 @@ export interface RunPackagesResult {
   escalations: Array<{ event: unknown; policy?: unknown }>;
   budget: { startingUSD: number; remainingUSD: number; escalationSpendUSD: number };
   warnings: string[];
+  /** Stage 7.1: Role executions (Worker + QA from this run). CEO/Manager added by caller. */
+  roleExecutions: RoleExecutionRecord[];
 }
 
 const ESCALATION_SPEND_CAP_PCT = 0.1;
@@ -277,9 +300,13 @@ Required schema (output this exact structure and nothing else):
   },
   "report": {
     "summary": "<string>",
-    "aggregations": <object>
+    "aggregations": <object>,
+    "aggregationsSchema": "<JSON schema or description of output shape>",
+    "exampleAggregations": <object, clearly labeled as example only>
   }
 }
+
+Report requirements: summary (required). For aggregations: either (a) non-empty aggregations, or (b) aggregationsSchema describing the output shape, or (c) exampleAggregations with example data. Empty aggregations {} is acceptable when aggregationsSchema or exampleAggregations is present.
 
 REQUIRED FILES (output MUST include exactly these paths in fileTree and files):
 - package.json (must include scripts: "build": "tsc", "start": "node dist/index.js")
@@ -293,10 +320,15 @@ REQUIRED FILES (output MUST include exactly these paths in fileTree and files):
 Constraints:
 - fileTree must list exactly every key in files (exact match).
 - files must contain runnable Node/TypeScript source code. All content must be complete and non-placeholder.
-- report must contain both required keys: summary and aggregations.
+- report must contain summary. Include aggregations (object), and either aggregationsSchema (describes output shape) or exampleAggregations (example data) so QA can verify the report section.
 - Do not fabricate input datasets unless input data is explicitly provided.
 - Do NOT include markdown fences or any text outside the JSON object.
-- Do not include these exact phrases anywhere (even in negation): ${AGGREGATION_REPORT_BANNED_PHRASES.map((p) => `"${p}"`).join(", ")}`
+- Do not include these exact phrases anywhere (even in negation): ${AGGREGATION_REPORT_BANNED_PHRASES.map((p) => `"${p}"`).join(", ")}.
+
+TypeScript compile requirements (tsconfig strict: true):
+- For any npm dependency, include @types/<name> in devDependencies when available (e.g. csv-parser -> @types/csv-parser). If no @types exist, add a src/types/<name>.d.ts declare module.
+- Type all callback parameters explicitly: no implicit any. E.g. .on('data', (data: Record<string, string>) => ...)
+- Prefer libraries with first-class types (e.g. papaparse) when available.`
       : "";
 
   const useDependencyInstruction =
@@ -1059,6 +1091,7 @@ export async function runWorkPackages(
             qualityScore: o.qaParsed.qualityScore,
             defects: o.qaParsed.defects,
             modelId: o.modelId,
+            costUSD: o.qaCostUSD,
           });
 
           const costVarianceRatio = workerRun.predictedCostUSD > 0 ? workerRun.actualCostUSD / workerRun.predictedCostUSD : 1;
@@ -1773,43 +1806,39 @@ Respond with ONLY a JSON object (no markdown, no extra text):
         }
 
         if (workerId === "aggregation-report" && qaParsed.pass && ctx.runSessionId) {
+          const verifyMode = getQaVerifyBuildMode();
           try {
             const parsed = JSON.parse(fullWorkerOutput.trim()) as AggregationArtifact;
             const result = await assembleDeliverable(ctx.runSessionId, parsed);
-            const verify = await verifyAssemblyOutput(result.outputDir);
-            if (!verify.success) {
-              const compilerErrors = (verify.error ?? verify.stderr ?? verify.stdout).trim();
-              qaParsed = {
-                pass: false,
-                qualityScore: 0.3,
-                defects: [
-                  "TypeScript compilation failed",
-                  ...(compilerErrors ? compilerErrors.split("\n").map((l) => l.trim()).filter(Boolean) : []),
-                ],
-              };
-              warnings.push(`aggregation-report TypeScript compilation failed: ${verify.error ?? "unknown"}`);
-              if (ctx.ledger) {
-                ctx.ledger.recordDecision(ctx.runSessionId, {
-                  type: "ASSEMBLY",
-                  packageId: workerId,
-                  details: {
-                    outputDir: result.outputDir,
-                    fileCount: result.fileCount,
-                    compilationSuccess: false,
-                    compilerStderr: verify.stderr,
-                    compilerStdout: verify.stdout,
-                  },
-                });
+            if (ctx.ledger) {
+              ctx.ledger.recordDecision(ctx.runSessionId, {
+                type: "ASSEMBLY",
+                packageId: workerId,
+                details: { outputDir: result.outputDir, fileCount: result.fileCount },
+              });
+            }
+            console.log(`[runWorkPackages] Assembly completed for ${workerId}: ${result.fileCount} files -> ${result.outputDir}`);
+
+            if (verifyMode === "tsc_no_install") {
+              const verify = await verifyAssemblyOutputNoEmit(result.outputDir);
+              if (!verify.success) {
+                if (verify.isModuleResolutionError) {
+                  warnings.push(
+                    "aggregation-report: External dependency resolution not verified (no-install QA). Add .d.ts stubs for external deps."
+                  );
+                } else {
+                  const compilerErrors = (verify.error ?? verify.stderr ?? verify.stdout).trim();
+                  qaParsed = {
+                    pass: false,
+                    qualityScore: 0.3,
+                    defects: [
+                      "TypeScript compilation failed",
+                      ...(compilerErrors ? compilerErrors.split("\n").map((l) => l.trim()).filter(Boolean) : []),
+                    ],
+                  };
+                  warnings.push(`aggregation-report TypeScript compilation failed: ${verify.error ?? "unknown"}`);
+                }
               }
-            } else {
-              if (ctx.ledger) {
-                ctx.ledger.recordDecision(ctx.runSessionId, {
-                  type: "ASSEMBLY",
-                  packageId: workerId,
-                  details: { outputDir: result.outputDir, fileCount: result.fileCount, compilationSuccess: true },
-                });
-              }
-              console.log(`[runWorkPackages] Assembly completed for ${workerId}: ${result.fileCount} files -> ${result.outputDir}`);
             }
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -2188,11 +2217,42 @@ Respond with ONLY a JSON object (no markdown, no extra text):
     }
   }
 
+  const qaByWorkerId = new Map<string, QAResult>();
+  for (const q of qaResults) {
+    qaByWorkerId.set(q.workerPackageId, q);
+  }
+
+  const roleExecutions: RoleExecutionRecord[] = [
+    ...runs.map((r): RoleExecutionRecord => {
+      const qa = qaByWorkerId.get(r.packageId);
+      const workerOk = !qa || qa.pass;
+      const score =
+        typeof r.eval?.result?.overall === "number" ? r.eval.result.overall : r.actualQuality;
+      return {
+        nodeId: r.packageId,
+        role: "worker",
+        modelId: r.modelId,
+        costUSD: r.actualCostUSD,
+        score,
+        status: workerOk ? "ok" : "fail",
+      };
+    }),
+    ...qaResults.map((q): RoleExecutionRecord => ({
+      nodeId: q.packageId,
+      role: "qa",
+      modelId: q.modelId,
+      costUSD: q.costUSD,
+      score: q.qualityScore,
+      status: q.pass ? "ok" : "fail",
+    })),
+  ];
+
   return {
     runs,
     qaResults,
     escalations,
     budget: { startingUSD: projectBudgetUSD, remainingUSD, escalationSpendUSD },
     warnings,
+    roleExecutions,
   };
 }

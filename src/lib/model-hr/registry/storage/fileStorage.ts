@@ -197,7 +197,8 @@ export class FileStorageAdapter implements StorageAdapter {
     } catch (err) {
       const e = err as NodeJS.ErrnoException;
       if (e.code === "ENOENT") return [];
-      throw err;
+      console.warn(`[ModelHR] loadPriors(${modelId}): invalid JSON, returning []:`, e instanceof Error ? e.message : String(err));
+      return [];
     }
   }
 

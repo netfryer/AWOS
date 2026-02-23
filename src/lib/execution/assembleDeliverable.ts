@@ -104,12 +104,46 @@ export interface VerifyAssemblyResult {
   stdout: string;
   stderr: string;
   error?: string;
+  /** True when failure is due to module resolution (Cannot find module), not TS errors */
+  isModuleResolutionError?: boolean;
 }
 
 /**
- * Runs npx tsc -p <tsconfig> to verify TypeScript compilation.
+ * Runs tsc --noEmit for type-check only. No output files, no npm install needed.
+ * Use for qaVerifyBuildMode "tsc_no_install".
+ */
+export async function verifyAssemblyOutputNoEmit(outputDir: string): Promise<VerifyAssemblyResult> {
+  const absDir = path.resolve(outputDir);
+  const tsconfigPath = path.join(absDir, "tsconfig.json");
+  try {
+    const { stdout, stderr } = await execAsync(`npx tsc --noEmit -p "${tsconfigPath}"`, {
+      cwd: process.cwd(),
+      timeout: TSC_VERIFY_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    });
+    return { success: true, stdout: stdout ?? "", stderr: stderr ?? "" };
+  } catch (e) {
+    const err = e as { stdout?: string; stderr?: string; message?: string; killed?: boolean };
+    const stdout = err.stdout ?? "";
+    const stderr = err.stderr ?? "";
+    const combined = [stdout, stderr].filter(Boolean).join("\n").trim();
+    const errorMsg = err.killed ? "TypeScript compilation timed out" : (err.message ?? String(e));
+    const isModuleResolutionError =
+      /TS2307|Cannot find module|cannot find module/i.test(combined) || /TS2307|Cannot find module|cannot find module/i.test(errorMsg);
+    return {
+      success: false,
+      stdout,
+      stderr,
+      error: combined || errorMsg,
+      isModuleResolutionError,
+    };
+  }
+}
+
+/**
+ * Runs npx tsc -p <tsconfig> to verify TypeScript compilation (full build).
  * Uses harness-provided tsconfig (from ensureDeliverableTsconfig).
- * Runs from process.cwd() so npx finds project's typescript; -p points to output tsconfig.
+ * Runs from process.cwd() so npx finds project's typescript; module resolution uses tsconfig dir.
  * Timeout: 20 seconds.
  */
 export async function verifyAssemblyOutput(outputDir: string): Promise<VerifyAssemblyResult> {

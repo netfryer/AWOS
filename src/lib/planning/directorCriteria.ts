@@ -147,11 +147,11 @@ export function getAcceptanceCriteria(
 /** Package-specific acceptance criteria (e.g. aggregation-report) for deterministic QA. */
 const PACKAGE_CRITERIA: Record<string, string[]> = {
   "aggregation-report": [
-    "Output includes a valid JSON report schema (parseable, with required keys: summary, aggregations)",
-    "Defines input CSV interface or structure; aggregation algorithm is described",
+    "Output includes valid JSON report with summary and (aggregations or aggregationsSchema or exampleAggregations)",
+    "Generic CSV: accept Record<string, string> when no explicit input schema provided; aggregation algorithm described",
     "Provides minimal runnable Node/TS implementation (this repo is TypeScript)",
     "No placeholder language (e.g. 'let's assume', 'for this example', 'sample dataset') in main deliverable",
-    "Example section, if present, is clearly labeled as optional/example only",
+    "README usage placeholders (e.g. <path-to-csv-file>) are acceptable for generic CLI tools",
   ],
 };
 

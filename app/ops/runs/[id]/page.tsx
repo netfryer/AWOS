@@ -116,15 +116,18 @@ export default function RunDetailPage() {
       if (sessionRes.ok) {
         setSession(sessionData.session ? { progress: sessionData.session.progress } : null);
       }
-      if (!bundleRes.ok) {
+      // Fall back to demo run when bundle or session is missing (sync runs never create a session)
+      if (!bundleRes.ok || !sessionRes.ok) {
         const demoRes = await fetch(`/api/ops/demo/runs/${encodeURIComponent(id)}`);
         if (demoRes.ok) {
           const demoData = await demoRes.json();
-          setBundle(demoData.run?.bundle ? { ledger: demoData.run.bundle.ledger } : null);
+          if (!bundleRes.ok && demoData.run?.bundle) {
+            setBundle({ ledger: demoData.run.bundle.ledger });
+          }
           if (!sessionRes.ok && demoData.run?.result) {
             setSession({ progress: { partialResult: demoData.run.result } });
           }
-        } else if (!sessionRes.ok) {
+        } else if (!bundleRes.ok && !sessionRes.ok) {
           throw new Error("Run not found");
         }
       }
@@ -157,6 +160,17 @@ export default function RunDetailPage() {
     navigator.clipboard.writeText(md);
     setCopyFeedback(true);
     setTimeout(() => setCopyFeedback(false), 1500);
+  }, [id, bundle, session]);
+
+  const handleExportJson = useCallback(() => {
+    const fullData = { bundle, session };
+    const blob = new Blob([JSON.stringify(fullData, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `run-${id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
   }, [id, bundle, session]);
 
   if (loading) {
@@ -201,15 +215,6 @@ export default function RunDetailPage() {
   const aggRun = result?.runs?.find((r) => r.packageId === "aggregation-report" || r.packageId?.includes("aggregation"));
   const deliverableOutput = aggRun?.output ?? null;
   const deliveryStatus = selectDeliveryStatus(ledger?.decisions);
-  const handleExportJson = useCallback(() => {
-    const blob = new Blob([JSON.stringify(fullData, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `run-${id}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-  }, [id, bundle, session]);
 
   return (
     <div style={{ maxWidth: 1024, margin: "0 auto" }}>

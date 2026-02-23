@@ -186,10 +186,11 @@ export function deterministicDecomposeDirective(directive: string): ProjectSubta
       title: "Aggregation + JSON report",
       description:
         "Define a JSON report schema, an aggregation algorithm, and a minimal runnable Node/TS implementation. " +
-        "Output must include: (1) JSON schema for the report, (2) input CSV interface definition, " +
+        "Output must include: (1) JSON schema for the report (summary + aggregationsSchema or exampleAggregations), " +
+        "(2) input CSV interface when provided, or generic Record type for generic CSV tooling, " +
         "(3) aggregation logic description, (4) executable Node/TS code. " +
         "Do NOT invent sample data unless input data is explicitly provided. " +
-        "If no input is given, define the interface, describe aggregation, and output schema + example section (clearly labeled as example only).",
+        "If no input is given, output schema + example section (clearly labeled as example only).",
       taskType: "code",
       difficulty: "medium",
     });

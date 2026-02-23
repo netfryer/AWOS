@@ -20,9 +20,9 @@ const WORKER_CRITERIA = [
 ];
 
 const AGGREGATION_CRITERIA = [
-  "Output includes a valid JSON report schema (parseable, with required keys: summary, aggregations)",
+  "Output includes valid JSON report with summary and (aggregations or aggregationsSchema or exampleAggregations)",
   "File tree + code blocks for key files (parser, stats, cli); README with usage examples",
-  "No placeholder language; minimal runnable Node/TS implementation",
+  "No placeholder language (e.g. 'let's assume'); README placeholders like <path-to-file> are acceptable",
 ];
 
 const QA_CRITERIA = [

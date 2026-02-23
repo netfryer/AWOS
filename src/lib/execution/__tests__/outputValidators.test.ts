@@ -52,11 +52,33 @@ describe("validateAggregationReportOutput", () => {
     }
   });
 
-  it("fails when output contains code fences", () => {
+  it("fails when output is wrapped in markdown code fences", () => {
     const bad = "```json\n" + VALID_STRICT_JSON + "\n```";
     const r = validateAggregationReportOutput(bad);
     expect(r.pass).toBe(false);
     expect(r.defects.some((d) => d.includes("code fences"))).toBe(true);
+  });
+
+  it("passes when valid JSON has embedded code fences in file contents (e.g. README.md)", () => {
+    const withEmbeddedFences = JSON.stringify({
+      fileTree: AGGREGATION_REPORT_REQUIRED_FILES,
+      files: Object.fromEntries(
+        AGGREGATION_REPORT_REQUIRED_FILES.map((p) => [
+          p,
+          p === "package.json"
+            ? "{\"name\":\"x\",\"devDependencies\":{\"typescript\":\"^5.0.0\"},\"scripts\":{\"build\":\"tsc\",\"start\":\"node dist/index.js\"}}"
+            : p.endsWith(".ts")
+              ? "export {};"
+              : p === "README.md"
+                ? "## Usage\n\n1. Build:\n\n```\nnpm run build\n```"
+                : "{}",
+        ])
+      ),
+      report: { summary: "ok", aggregations: {} },
+    });
+    const r = validateAggregationReportOutput(withEmbeddedFences);
+    expect(r.pass).toBe(true);
+    expect(r.defects).toHaveLength(0);
   });
 
   it("fails when JSON is invalid", () => {
@@ -84,7 +106,7 @@ describe("validateAggregationReportOutput", () => {
     expect(r.defects.some((d) => d.includes("summary"))).toBe(true);
   });
 
-  it("fails when report missing aggregations", () => {
+  it("fails when report has no aggregations, aggregationsSchema, or exampleAggregations", () => {
     const missing = JSON.stringify({
       fileTree: ["x.ts"],
       files: { "x.ts": "x" },
@@ -92,7 +114,57 @@ describe("validateAggregationReportOutput", () => {
     });
     const r = validateAggregationReportOutput(missing);
     expect(r.pass).toBe(false);
-    expect(r.defects.some((d) => d.includes("aggregations"))).toBe(true);
+    expect(r.defects.some((d) => d.includes("aggregations") || d.includes("aggregationsSchema") || d.includes("exampleAggregations"))).toBe(true);
+  });
+
+  it("passes when report has exampleAggregations and aggregationsSchema even with empty aggregations", () => {
+    const withSchemaAndExample = JSON.stringify({
+      fileTree: AGGREGATION_REPORT_REQUIRED_FILES,
+      files: Object.fromEntries(
+        AGGREGATION_REPORT_REQUIRED_FILES.map((p) => [
+          p,
+          p === "package.json"
+            ? "{\"name\":\"x\",\"devDependencies\":{\"typescript\":\"^5.0.0\"},\"scripts\":{\"build\":\"tsc\",\"start\":\"node dist/index.js\"}}"
+            : p.endsWith(".ts")
+              ? "export {};"
+              : p === "README.md"
+                ? "# x"
+                : "{}",
+        ])
+      ),
+      report: {
+        summary: "CLI parses CSV and outputs JSON stats.",
+        aggregations: {},
+        aggregationsSchema: "Object with totalRows, columnStats per column",
+        exampleAggregations: { totalRows: 10, columnStats: { name: 10 } },
+      },
+    });
+    const r = validateAggregationReportOutput(withSchemaAndExample);
+    expect(r.pass).toBe(true);
+    expect(r.defects).toHaveLength(0);
+  });
+
+  it("produces warning (not defect) when README contains placeholder like <path-to-csv-file>", () => {
+    const withPlaceholder = JSON.stringify({
+      fileTree: AGGREGATION_REPORT_REQUIRED_FILES,
+      files: Object.fromEntries(
+        AGGREGATION_REPORT_REQUIRED_FILES.map((p) => [
+          p,
+          p === "package.json"
+            ? "{\"name\":\"x\",\"devDependencies\":{\"typescript\":\"^5.0.0\"},\"scripts\":{\"build\":\"tsc\",\"start\":\"node dist/index.js\"}}"
+            : p.endsWith(".ts")
+              ? "export {};"
+              : p === "README.md"
+                ? "## Usage\n\n```\nnpm start -- <path-to-csv-file>\n```"
+                : "{}",
+        ])
+      ),
+      report: { summary: "ok", aggregations: {} },
+    });
+    const r = validateAggregationReportOutput(withPlaceholder);
+    expect(r.pass).toBe(true);
+    expect(r.warnings).toBeDefined();
+    expect(r.warnings!.some((w) => w.includes("placeholder") || w.includes("<path"))).toBe(true);
   });
 
   it("fails when fileTree does not match files keys", () => {
@@ -140,6 +212,49 @@ describe("validateAggregationReportOutput", () => {
     const r = validateAggregationReportOutput(bad);
     expect(r.pass).toBe(false);
     expect(r.defects.some((d) => d.includes("devDependencies") || d.includes("typescript"))).toBe(true);
+  });
+
+  it("fails when package.json has csv-parser but lacks @types/csv-parser", () => {
+    const bad = JSON.stringify({
+      fileTree: AGGREGATION_REPORT_REQUIRED_FILES,
+      files: Object.fromEntries(
+        AGGREGATION_REPORT_REQUIRED_FILES.map((p) => [
+          p,
+          p === "package.json"
+            ? "{\"name\":\"x\",\"dependencies\":{\"csv-parser\":\"^3.0.0\"},\"devDependencies\":{\"typescript\":\"^5.0.0\"},\"scripts\":{\"build\":\"tsc\",\"start\":\"node dist/index.js\"}}"
+            : p.endsWith(".ts")
+              ? "export {};"
+              : p === "README.md"
+                ? "# x"
+                : "{}",
+        ])
+      ),
+      report: { summary: "ok", aggregations: {} },
+    });
+    const r = validateAggregationReportOutput(bad);
+    expect(r.pass).toBe(false);
+    expect(r.defects.some((d) => d.includes("@types/csv-parser"))).toBe(true);
+  });
+
+  it("passes when package.json has csv-parser and @types/csv-parser", () => {
+    const good = JSON.stringify({
+      fileTree: AGGREGATION_REPORT_REQUIRED_FILES,
+      files: Object.fromEntries(
+        AGGREGATION_REPORT_REQUIRED_FILES.map((p) => [
+          p,
+          p === "package.json"
+            ? "{\"name\":\"x\",\"dependencies\":{\"csv-parser\":\"^3.0.0\"},\"devDependencies\":{\"typescript\":\"^5.0.0\",\"@types/csv-parser\":\"^1.2.0\"},\"scripts\":{\"build\":\"tsc\",\"start\":\"node dist/index.js\"}}"
+            : p.endsWith(".ts")
+              ? "export {};"
+              : p === "README.md"
+                ? "# x"
+                : "{}",
+        ])
+      ),
+      report: { summary: "ok", aggregations: {} },
+    });
+    const r = validateAggregationReportOutput(good);
+    expect(r.pass).toBe(true);
   });
 
   it("fails when package.json lacks scripts.build or scripts.start", () => {

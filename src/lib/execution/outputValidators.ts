@@ -8,6 +8,8 @@
 export interface OutputValidationResult {
   pass: boolean;
   defects: string[];
+  /** Warnings (e.g. README placeholders) that do not cause fail */
+  warnings?: string[];
 }
 
 export interface StructuredAggregationValidationResult {
@@ -33,8 +35,8 @@ export const AGGREGATION_REPORT_BANNED_PHRASES = [
 /** Required top-level keys for aggregation-report strict JSON schema. */
 export const AGGREGATION_REPORT_STRICT_KEYS = ["fileTree", "files", "report"] as const;
 
-/** Required keys inside report object. */
-export const AGGREGATION_REPORT_REQUIRED_KEYS = ["summary", "aggregations"] as const;
+/** Required keys inside report object. summary always required; aggregations OR (aggregationsSchema | exampleAggregations) required. */
+export const AGGREGATION_REPORT_REQUIRED_KEYS = ["summary"] as const;
 
 /** Required file paths for a compilable aggregation-report deliverable. */
 export const AGGREGATION_REPORT_REQUIRED_FILES = [
@@ -82,6 +84,16 @@ function validatePackageJsonContent(pkgJsonContent: string): string[] {
       defects.push("package.json scripts must include start");
     }
   }
+  // Packages that require @types/* for strict TypeScript (no bundled types)
+  const deps = obj.dependencies as Record<string, unknown> | undefined;
+  const PACKAGES_REQUIRING_TYPES = ["csv-parser"];
+  if (typeof deps === "object" && deps !== null && devDeps && typeof devDeps === "object" && !Array.isArray(devDeps)) {
+    for (const pkg of PACKAGES_REQUIRING_TYPES) {
+      if (pkg in deps && !(`@types/${pkg}` in devDeps)) {
+        defects.push(`package.json: when using "${pkg}", add "@types/${pkg}" to devDependencies for strict TypeScript`);
+      }
+    }
+  }
   return defects;
 }
 
@@ -96,7 +108,11 @@ function hasStrictSchema(obj: unknown): obj is Record<string, unknown> {
   if (typeof report !== "object" || report === null || Array.isArray(report)) return false;
   const reportKeys = Object.keys(report as Record<string, unknown>);
   if (!AGGREGATION_REPORT_REQUIRED_KEYS.every((k) => reportKeys.includes(k))) return false;
-  return true;
+  const hasReportSection =
+    ("aggregations" in (report as object) && typeof (report as Record<string, unknown>).aggregations === "object") ||
+    ("aggregationsSchema" in (report as object) && (report as Record<string, unknown>).aggregationsSchema != null) ||
+    ("exampleAggregations" in (report as object) && typeof (report as Record<string, unknown>).exampleAggregations === "object");
+  return hasReportSection;
 }
 
 function validateStrictAggregationReport(obj: Record<string, unknown>): string[] {
@@ -131,8 +147,13 @@ function validateStrictAggregationReport(obj: Record<string, unknown>): string[]
   if (typeof report?.summary !== "string") {
     defects.push('"report.summary" must be a string');
   }
-  if (report?.aggregations == null || typeof report.aggregations !== "object") {
-    defects.push('"report.aggregations" must be an object');
+  const hasAggregations = report?.aggregations != null && typeof report.aggregations === "object";
+  const hasSchema = report?.aggregationsSchema != null;
+  const hasExample = report?.exampleAggregations != null && typeof report.exampleAggregations === "object";
+  if (!hasAggregations && !hasSchema && !hasExample) {
+    defects.push(
+      '"report" must include aggregations (object), and/or aggregationsSchema, and/or exampleAggregations (object)'
+    );
   }
 
   return defects;
@@ -155,9 +176,10 @@ export function validateAggregationReportOutput(output: string): OutputValidatio
     }
   }
 
-  // 2. Reject code fences (output must be raw JSON only)
-  if (/```/.test(trimmed)) {
-    defects.push("Output must not contain code fences (```)");
+  // 2. Reject only markdown-wrapped output (e.g. ```json\n{...}\n```). Do not reject
+  // embedded code fences in file contents (e.g. README.md with code blocks).
+  if (trimmed.startsWith("```")) {
+    defects.push("Output must not be wrapped in markdown code fences");
   }
 
   // 3. Parse single JSON object
@@ -179,16 +201,25 @@ export function validateAggregationReportOutput(output: string): OutputValidatio
   // 4. Strict schema
   if (!hasStrictSchema(record)) {
     defects.push(
-      'Output must have top-level keys: "fileTree" (string[]), "files" (object), "report" (object with "summary" and "aggregations")'
+      'Output must have top-level keys: "fileTree" (string[]), "files" (object), "report" (object with "summary" and aggregations/aggregationsSchema/exampleAggregations)'
     );
     return { pass: defects.length === 0, defects };
   }
 
   defects.push(...validateStrictAggregationReport(record));
 
+  const warnings: string[] = [];
+  const readmeContent = typeof record.files === "object" && record.files !== null
+    ? (record.files as Record<string, unknown>)["README.md"]
+    : undefined;
+  if (typeof readmeContent === "string" && /<[^>]+>/.test(readmeContent)) {
+    warnings.push("README contains placeholder patterns (e.g. <path-to-file>); acceptable for usage examples");
+  }
+
   return {
     pass: defects.length === 0,
     defects,
+    ...(warnings.length > 0 && { warnings }),
   };
 }
 
@@ -211,9 +242,9 @@ export function validateStructuredAggregationArtifact(
     }
   }
 
-  // 2. Reject markdown fences
-  if (/```/.test(trimmed)) {
-    defects.push("Output must not contain markdown code fences");
+  // 2. Reject only markdown-wrapped output. Do not reject embedded code fences in file contents.
+  if (trimmed.startsWith("```")) {
+    defects.push("Output must not be wrapped in markdown code fences");
   }
 
   // 3. JSON.parse must succeed
@@ -235,7 +266,7 @@ export function validateStructuredAggregationArtifact(
   // 4. Top-level shape
   if (!AGGREGATION_REPORT_STRICT_KEYS.every((k) => k in record)) {
     defects.push(
-      'Output must have top-level keys: "fileTree" (string[]), "files" (object), "report" (object with "summary" and "aggregations")'
+      'Output must have top-level keys: "fileTree" (string[]), "files" (object), "report" (object with "summary" and aggregations/aggregationsSchema/exampleAggregations)'
     );
     return { pass: false, defects, qualityScore: 0.4 };
   }
@@ -281,7 +312,7 @@ export function validateStructuredAggregationArtifact(
     }
   }
 
-  // 7. report.summary must exist and be string
+  // 7. report.summary must exist; report must have aggregations and/or aggregationsSchema and/or exampleAggregations
   const report = record.report as Record<string, unknown> | null | undefined;
   if (typeof report !== "object" || report === null || Array.isArray(report)) {
     defects.push('"report" must be an object');
@@ -291,10 +322,13 @@ export function validateStructuredAggregationArtifact(
     } else if (typeof report.summary !== "string") {
       defects.push('"report.summary" must be a string');
     }
-    if (!("aggregations" in report)) {
-      defects.push('"report.aggregations" must exist');
-    } else if (report.aggregations == null || typeof report.aggregations !== "object") {
-      defects.push('"report.aggregations" must be an object');
+    const hasAggregations = report.aggregations != null && typeof report.aggregations === "object";
+    const hasSchema = report.aggregationsSchema != null;
+    const hasExample = report.exampleAggregations != null && typeof report.exampleAggregations === "object";
+    if (!hasAggregations && !hasSchema && !hasExample) {
+      defects.push(
+        '"report" must include aggregations (object), and/or aggregationsSchema, and/or exampleAggregations (object)'
+      );
     }
   }
 

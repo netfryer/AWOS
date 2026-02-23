@@ -27,6 +27,9 @@ export default function OpsLayout({
             <Link href="/ops/kpis" style={opsStyles.navLink}>
               KPIs
             </Link>
+            <Link href="/ops/roles" style={opsStyles.navLink}>
+              Roles
+            </Link>
             <Link href="/ops/governance" style={opsStyles.navLink}>
               Governance
             </Link>

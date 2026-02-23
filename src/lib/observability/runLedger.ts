@@ -7,6 +7,18 @@
 
 export type DecisionType = "ROUTE" | "AUDIT_PATCH" | "ESCALATION" | "BUDGET_OPTIMIZATION" | "MODEL_HR_SIGNAL" | "PROCUREMENT_FALLBACK" | "ASSEMBLY" | "ASSEMBLY_FAILED";
 
+/** Stage 7.1: Role execution record for RBEG. */
+export interface RoleExecutionRecord {
+  nodeId: string;
+  role: "ceo" | "executive" | "manager" | "worker" | "qa";
+  modelId?: string;
+  costUSD?: number;
+  score?: number;
+  status: "ok" | "retry" | "fail";
+  /** Optional failure reason (e.g. validation error message). */
+  notes?: string;
+}
+
 export interface DecisionRecord {
   tsISO: string;
   type: DecisionType;
@@ -51,6 +63,8 @@ export interface Ledger {
     skipReasons: Record<string, number>;
   };
   decisions: DecisionRecord[];
+  /** Stage 7.1: Role executions (CEO → Manager → Worker → QA). */
+  roleExecutions?: RoleExecutionRecord[];
 }
 
 const DECISIONS_CAP = 200;
@@ -82,7 +96,7 @@ export interface RunLedgerStore {
   recordVarianceSkipped(runSessionId: string, reason: string): void;
   recordBudgetOptimization(runSessionId: string, details: Record<string, unknown>): void;
   recordCouncilPlanningSkipped(runSessionId: string, reason: string): void;
-  finalizeLedger(runSessionId: string, finalMeta?: Partial<LedgerMeta>): void;
+  finalizeLedger(runSessionId: string, finalMeta?: Partial<LedgerMeta> & { completed?: number; roleExecutions?: RoleExecutionRecord[] }): void;
   getLedger(runSessionId: string): Ledger | undefined;
   listLedgers(): LedgerListItem[];
 }
@@ -189,13 +203,17 @@ class InMemoryRunLedgerStore implements RunLedgerStore {
     });
   }
 
-  finalizeLedger(runSessionId: string, finalMeta?: Partial<LedgerMeta> & { completed?: number }): void {
+  finalizeLedger(runSessionId: string, finalMeta?: Partial<LedgerMeta> & { completed?: number; roleExecutions?: RoleExecutionRecord[] }): void {
     const ledger = this.ledgers.get(runSessionId);
     if (!ledger) return;
     ledger.finishedAtISO = new Date().toISOString();
     if (finalMeta) {
-      const { completed, ...meta } = finalMeta;
+      const { completed, roleExecutions, ...meta } = finalMeta;
       if (completed != null) ledger.counts.completed = completed;
+      if (roleExecutions != null) ledger.roleExecutions = roleExecutions;
+      if (!roleExecutions || (Array.isArray(roleExecutions) && roleExecutions.length === 0)) {
+        console.warn(`[runLedger] finalizeLedger(${runSessionId}): roleExecutions missing or empty; RBEG telemetry may be incomplete`);
+      }
       if (Object.keys(meta).length > 0) {
         ledger.meta = { ...ledger.meta, ...meta };
       }

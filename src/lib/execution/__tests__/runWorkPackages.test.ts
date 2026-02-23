@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   buildWorkerPrompt,
   getMissingDependencyIds,
@@ -10,6 +10,16 @@ import { runOutputValidator } from "../outputValidators.js";
 import { route } from "../../../router.js";
 import type { AtomicWorkPackage } from "../../planning/packageWork.js";
 import type { ModelSpec } from "../../types.js";
+
+vi.mock("../../model-hr/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../model-hr/index.js")>();
+  return {
+    ...actual,
+    listEligibleModels: vi.fn().mockResolvedValue({ eligible: [] }),
+    loadPriorsForModel: vi.fn().mockResolvedValue([]),
+    recordObservation: vi.fn().mockResolvedValue(undefined),
+  };
+});
 
 describe("buildWorkerPrompt", () => {
   const basePkg = {
@@ -290,5 +300,201 @@ describe("aggregation-report missing dependency short-circuit", () => {
     expect(parsed.fileTree).toEqual([]);
     expect(parsed.files).toEqual({});
     expect(parsed.report.summary).toBe("Dependency artifacts missing");
+  });
+});
+
+describe("roleExecutions RBEG telemetry", () => {
+  const model: ModelSpec = {
+    id: "test-model",
+    displayName: "Test",
+    expertise: { code: 0.9, writing: 0.9, analysis: 0.9, general: 0.9 },
+    pricing: { inPer1k: 0.0001, outPer1k: 0.0002 },
+    reliability: 0.9,
+  };
+
+  const baseCtx = {
+    route: (task: { id: string }, models: ModelSpec[]) =>
+      route(task, models, { thresholds: { low: 0.5, medium: 0.5, high: 0.5 } }),
+    modelRegistry: [model],
+    varianceStatsTracker: {
+      getCalibration: async () => ({ nCost: 0, costMultiplier: null, nQuality: 0, qualityBias: null }),
+      recordSubtaskVariance: async () => {},
+    },
+    trustTracker: {
+      getTrust: () => 0.9,
+      updateTrustWorker: () => {},
+      updateTrustQa: () => {},
+    } as import("../../governance/trustTracker.js").TrustTracker,
+    nowISO: () => new Date().toISOString(),
+    runSessionId: "test-session",
+    ledger: {
+      createLedger: () => {},
+      recordDecision: () => {},
+      recordCost: () => {},
+      recordTrustDelta: () => {},
+      recordVarianceRecorded: () => {},
+      recordVarianceSkipped: () => {},
+      getLedger: () => undefined,
+      listLedgers: () => [],
+    } as import("../../observability/runLedger.js").RunLedgerStore,
+  };
+
+  it("Worker status is fail when QA fails (pass: false)", async () => {
+    const packages: AtomicWorkPackage[] = [
+      {
+        id: "worker-1",
+        role: "Worker",
+        name: "Worker 1",
+        description: "Implement",
+        acceptanceCriteria: ["A", "B", "C"],
+        inputs: {},
+        outputs: {},
+        dependencies: [],
+        estimatedTokens: 500,
+      },
+      {
+        id: "qa-1",
+        role: "QA",
+        name: "QA 1",
+        description: "Review worker-1",
+        acceptanceCriteria: ["A", "B", "C"],
+        inputs: {},
+        outputs: { pass: true, qualityScore: 0.5, defects: [] },
+        dependencies: ["worker-1"],
+        estimatedTokens: 200,
+      },
+    ];
+
+    const result = await runWorkPackages({
+      packages,
+      projectBudgetUSD: 10,
+      tierProfile: "cheap",
+      ctx: {
+        ...baseCtx,
+        llmTextExecute: async (_modelId, prompt) => {
+          if (prompt.includes("QA reviewer")) {
+            return {
+              text: '{"pass":false,"qualityScore":0.35,"defects":["validation failed"]}',
+              usage: { totalTokens: 100, inputTokens: 80, outputTokens: 20 },
+            };
+          }
+          return {
+            text: "worker output {\"selfConfidence\":0.8}",
+            usage: { totalTokens: 50, inputTokens: 30, outputTokens: 20 },
+          };
+        },
+      },
+    });
+
+    const workerExec = result.roleExecutions.find((e) => e.role === "worker" && e.nodeId === "worker-1");
+    const qaExec = result.roleExecutions.find((e) => e.role === "qa" && e.nodeId === "qa-1");
+    expect(workerExec).toBeDefined();
+    expect(workerExec!.status).toBe("fail");
+    expect(qaExec).toBeDefined();
+    expect(qaExec!.status).toBe("fail");
+  });
+
+  it("Worker status is ok when QA passes", async () => {
+    const packages: AtomicWorkPackage[] = [
+      {
+        id: "worker-1",
+        role: "Worker",
+        name: "Worker 1",
+        description: "Implement",
+        acceptanceCriteria: ["A", "B", "C"],
+        inputs: {},
+        outputs: {},
+        dependencies: [],
+        estimatedTokens: 500,
+      },
+      {
+        id: "qa-1",
+        role: "QA",
+        name: "QA 1",
+        description: "Review worker-1",
+        acceptanceCriteria: ["A", "B", "C"],
+        inputs: {},
+        outputs: { pass: true, qualityScore: 0.5, defects: [] },
+        dependencies: ["worker-1"],
+        estimatedTokens: 200,
+      },
+    ];
+
+    const result = await runWorkPackages({
+      packages,
+      projectBudgetUSD: 10,
+      tierProfile: "cheap",
+      ctx: {
+        ...baseCtx,
+        llmTextExecute: async (_modelId, prompt) => {
+          if (prompt.includes("QA reviewer")) {
+            return {
+              text: '{"pass":true,"qualityScore":0.9,"defects":[]}',
+              usage: { totalTokens: 100, inputTokens: 80, outputTokens: 20 },
+            };
+          }
+          return {
+            text: "worker output {\"selfConfidence\":0.8}",
+            usage: { totalTokens: 50, inputTokens: 30, outputTokens: 20 },
+          };
+        },
+      },
+    });
+
+    const workerExec = result.roleExecutions.find((e) => e.role === "worker" && e.nodeId === "worker-1");
+    expect(workerExec).toBeDefined();
+    expect(workerExec!.status).toBe("ok");
+  });
+
+  it("Worker score uses actualQuality (legacy) when no eval.overall", async () => {
+    const packages: AtomicWorkPackage[] = [
+      {
+        id: "worker-1",
+        role: "Worker",
+        name: "Worker 1",
+        description: "Implement",
+        acceptanceCriteria: ["A", "B", "C"],
+        inputs: {},
+        outputs: {},
+        dependencies: [],
+        estimatedTokens: 500,
+      },
+      {
+        id: "qa-1",
+        role: "QA",
+        name: "QA 1",
+        description: "Review worker-1",
+        acceptanceCriteria: ["A", "B", "C"],
+        inputs: {},
+        outputs: { pass: true, qualityScore: 0.5, defects: [] },
+        dependencies: ["worker-1"],
+        estimatedTokens: 200,
+      },
+    ];
+
+    const result = await runWorkPackages({
+      packages,
+      projectBudgetUSD: 10,
+      tierProfile: "cheap",
+      ctx: {
+        ...baseCtx,
+        llmTextExecute: async (_modelId, prompt) => {
+          if (prompt.includes("QA reviewer")) {
+            return {
+              text: '{"pass":true,"qualityScore":0.85,"defects":[]}',
+              usage: { totalTokens: 100, inputTokens: 80, outputTokens: 20 },
+            };
+          }
+          return {
+            text: "worker output {\"selfConfidence\":0.8}",
+            usage: { totalTokens: 50, inputTokens: 30, outputTokens: 20 },
+          };
+        },
+      },
+    });
+
+    const workerExec = result.roleExecutions.find((e) => e.role === "worker" && e.nodeId === "worker-1");
+    expect(workerExec).toBeDefined();
+    expect(workerExec!.score).toBe(0.85);
   });
 });

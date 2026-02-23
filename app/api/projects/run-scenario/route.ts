@@ -26,6 +26,8 @@ import {
   CSV_JSON_CLI_DEMO_DIRECTIVE,
 } from "../../../../src/lib/execution/presets/csvJsonCliDemo";
 import { saveDemoRun, extractDeliverablesFromRuns } from "../../../lib/demoRunsStore";
+import { runCEONode } from "../../../../src/lib/rbeg";
+import type { RoleExecutionRecord } from "../../../../src/lib/observability/runLedger";
 
 const PRESETS: Record<string, { packages: import("../../../../src/lib/planning/packageWork").AtomicWorkPackage[]; directive: string }> = {
   "csv-json-cli-demo": { packages: CSV_JSON_CLI_DEMO_PACKAGES, directive: CSV_JSON_CLI_DEMO_DIRECTIVE },
@@ -133,6 +135,11 @@ export async function POST(request: NextRequest) {
       ? PRESETS[body.presetId].directive
       : (body.directive as string);
 
+    const difficulty = body.difficulty ?? "medium";
+    runCEONode(directive, body.projectBudgetUSD, difficulty);
+    const ceoRoleExec: RoleExecutionRecord = { nodeId: "ceo", role: "ceo", status: "ok", costUSD: 0 };
+    const managerRoleExec: RoleExecutionRecord = { nodeId: "manager", role: "manager", status: "ok", costUSD: 0 };
+
     if (body.presetId) {
       packages = [...PRESETS[body.presetId].packages];
       plan = {
@@ -179,7 +186,6 @@ export async function POST(request: NextRequest) {
       packages = packageWork(plan, { cwd: body.cwd });
     }
 
-    validateWorkPackages(packages);
     let auditedPackages = packages;
     let audit: { auditPass: boolean; confidence: number; issues: unknown[]; recommendedPatches: unknown[]; members: string[]; skipped?: boolean; warning?: string } | undefined;
 
@@ -252,6 +258,23 @@ export async function POST(request: NextRequest) {
     ledgerStore.createLedger(runSessionId, {
       counts: { packagesTotal: auditedPackages.length, worker: workerCount, qa: qaCount },
     });
+
+    try {
+      validateWorkPackages(auditedPackages);
+    } catch (validationErr) {
+      const msg = validationErr instanceof Error ? validationErr.message : String(validationErr);
+      const managerRoleExecFail: RoleExecutionRecord = {
+        nodeId: "manager",
+        role: "manager",
+        status: "fail",
+        costUSD: 0,
+        notes: msg.slice(0, 200),
+      };
+      ledgerStore.finalizeLedger(runSessionId, {
+        roleExecutions: [ceoRoleExec, managerRoleExecFail],
+      });
+      return err("VALIDATION_ERROR", `Manager output validation failed: ${msg}`, { reason: msg });
+    }
 
     const portfolioMode = getPortfolioMode();
     let portfolio: PortfolioRecommendation | undefined;
@@ -360,10 +383,17 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await runWorkPackages(runInput);
+    const fullRoleExecutions: RoleExecutionRecord[] = [
+      ceoRoleExec,
+      managerRoleExec,
+      ...result.roleExecutions,
+    ];
     ledgerStore.finalizeLedger(runSessionId, {
       completed: result.runs.length + result.qaResults.length,
+      roleExecutions: fullRoleExecutions,
     });
 
+    const resultWithRoleExecutions = { ...result, roleExecutions: fullRoleExecutions };
     updateRunSession(runSessionId, {
       status: "completed",
       progress: {
@@ -371,7 +401,7 @@ export async function POST(request: NextRequest) {
         completedPackages: result.runs.length + result.qaResults.length,
         runningPackages: 0,
         warnings: result.warnings,
-        partialResult: result,
+        partialResult: resultWithRoleExecutions,
       },
     });
 
@@ -389,7 +419,7 @@ export async function POST(request: NextRequest) {
       timestamp: new Date().toISOString(),
       plan,
       packages: auditedPackages,
-      result: { runs: result.runs, qaResults: result.qaResults, escalations: result.escalations, budget: result.budget, warnings: result.warnings },
+      result: { runs: result.runs, qaResults: result.qaResults, escalations: result.escalations, budget: result.budget, warnings: result.warnings, roleExecutions: fullRoleExecutions },
       deliverables: Object.keys(deliverables).length > 0 ? deliverables : undefined,
       bundle: { ledger: ledger ?? undefined, summary: summary ?? undefined },
     });
@@ -412,7 +442,7 @@ export async function POST(request: NextRequest) {
       plan,
       packages: auditedPackages,
       ...(audit && { audit }),
-      result,
+      result: resultWithRoleExecutions,
       bundle,
       async: false,
       estimateOnly: false,

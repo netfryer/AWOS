@@ -210,10 +210,21 @@ interface AssertionResult {
   skipped?: boolean;
 }
 
+interface RoleExecutionRecord {
+  nodeId: string;
+  role: string;
+  status?: string;
+  modelId?: string;
+  score?: number;
+  costUSD?: number;
+  notes?: string;
+}
+
 interface LedgerSummaryWithDecisions {
   costs?: { totalUSD?: number };
   routing?: { portfolioMode?: string; bypassRate?: number };
   governance?: { councilPlanningSkipped?: boolean };
+  roleExecutions?: RoleExecutionRecord[];
   decisions?: Array<{
     type: string;
     packageId?: string;
@@ -351,10 +362,11 @@ export default function OpsRunPage() {
   const [packages, setPackages] = useState<unknown[]>([]);
   const [runResult, setRunResult] = useState<{
     runs?: Array<{ packageId: string; modelId: string; actualCostUSD: number; isEstimatedCost?: boolean; artifactId?: string }>;
-    qaResults?: Array<{ packageId: string; workerPackageId: string; pass: boolean; qualityScore: number; modelId: string }>;
+    qaResults?: Array<{ packageId: string; workerPackageId: string; pass: boolean; qualityScore: number; modelId: string; costUSD?: number }>;
     escalations?: unknown[];
     budget?: { startingUSD: number; remainingUSD: number };
     warnings?: string[];
+    roleExecutions?: RoleExecutionRecord[];
   } | null>(null);
   const [runSessionId, setRunSessionId] = useState<string | null>(null);
   const [ledgerSummary, setLedgerSummary] = useState<LedgerSummaryWithDecisions | null>(null);
@@ -423,6 +435,7 @@ export default function OpsRunPage() {
   function buildLedgerSummaryFromLedger(l: {
     costs?: Record<string, number>;
     decisions?: Array<{ type: string; details?: Record<string, unknown> }>;
+    roleExecutions?: RoleExecutionRecord[];
   } | null): LedgerSummaryWithDecisions | null {
     if (!l) return null;
     const totalUSD = (l.costs?.councilUSD ?? 0) + (l.costs?.workerUSD ?? 0) + (l.costs?.qaUSD ?? 0) + (l.costs?.deterministicQaUSD ?? 0);
@@ -443,6 +456,7 @@ export default function OpsRunPage() {
           (d) => d.type === "BUDGET_OPTIMIZATION" && d.details?.councilPlanningSkipped === true
         ),
       },
+      roleExecutions: l.roleExecutions,
       decisions: l.decisions ?? [],
     };
   }
@@ -1303,6 +1317,62 @@ export default function OpsRunPage() {
                       </div>
                     </div>
                   )}
+                  {(() => {
+                    const roleExecutions: RoleExecutionRecord[] =
+                      (runResult as { roleExecutions?: RoleExecutionRecord[] })?.roleExecutions ??
+                      ledgerSummary?.roleExecutions ??
+                      [];
+                    const sorted =
+                      roleExecutions.length > 0
+                        ? [...roleExecutions].sort((a, b) => {
+                            const order: Record<string, number> = { ceo: 0, executive: 1, manager: 2, worker: 3, qa: 4 };
+                            return (order[a.role] ?? 99) - (order[b.role] ?? 99);
+                          })
+                        : [];
+                    return (
+                      <div>
+                        <h3 style={{ fontSize: 13, fontWeight: 600, color: "#334155", marginBottom: 12 }}>Role Executions</h3>
+                        {sorted.length > 0 ? (
+                          <div style={{ borderRadius: 6, border: "1px solid #e2e8f0", overflow: "hidden" }}>
+                            <table style={opsStyles.table}>
+                              <thead>
+                                <tr>
+                                  <th style={opsStyles.th}>role</th>
+                                  <th style={opsStyles.th}>nodeId</th>
+                                  <th style={opsStyles.th}>status</th>
+                                  <th style={opsStyles.th}>modelId</th>
+                                  <th style={{ ...opsStyles.th, textAlign: "right" }}>score</th>
+                                  <th style={{ ...opsStyles.th, textAlign: "right" }}>costUSD</th>
+                                  <th style={opsStyles.th}>notes</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {sorted.map((r, i) => (
+                                  <tr key={i}>
+                                    <td style={opsStyles.td}>{r.role}</td>
+                                    <td style={opsStyles.td}>{r.nodeId}</td>
+                                    <td style={opsStyles.td}>{r.status ?? "—"}</td>
+                                    <td style={opsStyles.td}>{r.modelId ?? "—"}</td>
+                                    <td style={{ ...opsStyles.td, textAlign: "right", fontFamily: "monospace" }}>
+                                      {typeof r.score === "number" ? r.score.toFixed(2) : "—"}
+                                    </td>
+                                    <td style={{ ...opsStyles.td, textAlign: "right", fontFamily: "monospace" }}>
+                                      {typeof r.costUSD === "number" ? `$${r.costUSD.toFixed(4)}` : "—"}
+                                    </td>
+                                    <td style={{ ...opsStyles.td, color: "#64748b", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis" }} title={r.notes}>
+                                      {r.notes ?? "—"}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        ) : (
+                          <p style={{ ...opsStyles.muted, fontSize: 12 }}>No roleExecutions found in this response.</p>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {runResult.escalations && runResult.escalations.length > 0 && (
                     <div>
                       <h3 style={{ fontSize: 13, fontWeight: 600, color: "#334155", marginBottom: 12 }}>Escalations</h3>

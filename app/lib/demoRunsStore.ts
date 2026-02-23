@@ -22,6 +22,7 @@ export interface DemoRunPayload {
     escalations?: unknown[];
     budget?: { startingUSD: number; remainingUSD: number };
     warnings?: string[];
+    roleExecutions?: RoleExecutionRecord[];
   };
   /** Persisted deliverable content (aggregation-report output, etc.). */
   deliverables?: Record<string, DeliverableEntry>;
@@ -29,9 +30,20 @@ export interface DemoRunPayload {
     ledger?: {
       costs?: Record<string, number>;
       decisions?: Array<{ type: string; packageId?: string; details?: Record<string, unknown> }>;
+      roleExecutions?: RoleExecutionRecord[];
     };
     summary?: unknown;
   };
+}
+
+export interface RoleExecutionRecord {
+  role: string;
+  nodeId: string;
+  status?: "ok" | "fail" | "retry";
+  modelId?: string;
+  score?: number;
+  costUSD?: number;
+  notes?: string;
 }
 
 function getStoreDir(): string {
@@ -134,6 +146,64 @@ export async function listDemoRuns(limit = 20): Promise<DemoRunListItem[]> {
     }
     items.sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
     return items.slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
+export interface DemoRunWithRoleExecutions {
+  runSessionId: string;
+  timestamp: string;
+  roleExecutions: RoleExecutionRecord[];
+}
+
+/** List demo runs with roleExecutions for role analytics. Filter by hours (0=all), limit scans. */
+export async function listDemoRunsForRoles(
+  hours: number,
+  limit: number
+): Promise<DemoRunWithRoleExecutions[]> {
+  try {
+    const dir = getStoreDir();
+    const entries = await readdir(dir, { withFileTypes: true });
+    const files = entries.filter((e) => e.isFile() && e.name.endsWith(".json")).map((e) => e.name);
+    const cutoff =
+      hours > 0 ? Date.now() - hours * 60 * 60 * 1000 : 0;
+    const items: DemoRunWithRoleExecutions[] = [];
+    const withTs: Array<{ ts: string; f: string }> = [];
+    for (const f of files) {
+      try {
+        const raw = await readFile(path.join(dir, f), "utf-8");
+        const parsed = JSON.parse(raw) as DemoRunPayload;
+        const ts = parsed?.timestamp ?? "";
+        if (!parsed?.runSessionId || !ts) continue;
+        const tsMs = new Date(ts).getTime();
+        if (cutoff > 0 && tsMs < cutoff) continue;
+        withTs.push({ ts, f });
+      } catch {
+        /* skip */
+      }
+    }
+    withTs.sort((a, b) => b.ts.localeCompare(a.ts));
+    const toLoad = withTs.slice(0, limit);
+    for (const { f } of toLoad) {
+      try {
+        const id = f.slice(0, -5);
+        const raw = await readFile(path.join(dir, f), "utf-8");
+        const parsed = JSON.parse(raw) as DemoRunPayload;
+        const roleExecutions: RoleExecutionRecord[] =
+          (parsed.result as { roleExecutions?: RoleExecutionRecord[] } | undefined)?.roleExecutions ??
+          (parsed.bundle?.ledger as { roleExecutions?: RoleExecutionRecord[] } | undefined)?.roleExecutions ??
+          [];
+        items.push({
+          runSessionId: parsed.runSessionId,
+          timestamp: parsed.timestamp ?? "",
+          roleExecutions,
+        });
+      } catch {
+        /* skip */
+      }
+    }
+    return items;
   } catch {
     return [];
   }
