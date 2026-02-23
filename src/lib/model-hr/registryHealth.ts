@@ -1,11 +1,13 @@
 /**
  * Registry health: records fallback usage and provides fallback count for Ops UI.
- * Retention: trims entries older than MODEL_HR_FALLBACK_RETENTION_DAYS on read.
+ * Uses file or DB based on PERSISTENCE_DRIVER.
  */
 
 import { appendFile, readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { getFallbackRetentionDays } from "./config.js";
+import { getPersistenceDriver } from "../persistence/driver.js";
+import { recordRegistryFallbackDb, getRegistryFallbackCountLastHoursDb } from "./registryFallbackDb.js";
 
 function getDataDir(): string {
   return process.env.MODEL_HR_DATA_DIR ?? join(process.cwd(), ".data", "model-hr");
@@ -19,6 +21,10 @@ function getFallbackLogPath(): string {
  * Record that registry fallback was used. Never throws.
  */
 export function recordRegistryFallback(errorSummary?: string): void {
+  if (getPersistenceDriver() === "db") {
+    recordRegistryFallbackDb(errorSummary).catch(() => {});
+    return;
+  }
   const entry = {
     tsISO: new Date().toISOString(),
     errorSummary: errorSummary ?? null,
@@ -26,16 +32,16 @@ export function recordRegistryFallback(errorSummary?: string): void {
   const line = JSON.stringify(entry) + "\n";
   mkdir(getDataDir(), { recursive: true })
     .then(() => appendFile(getFallbackLogPath(), line, "utf-8"))
-    .catch(() => {
-      /* swallow - no run failure */
-    });
+    .catch(() => {});
 }
 
 /**
  * Count fallback events in the last N hours. Returns 0 on error.
- * Trims file to retention window when reading (prevents unbounded growth).
  */
 export async function getRegistryFallbackCountLastHours(hours: number = 24): Promise<number> {
+  if (getPersistenceDriver() === "db") {
+    return getRegistryFallbackCountLastHoursDb(hours);
+  }
   try {
     const path = getFallbackLogPath();
     const raw = await readFile(path, "utf-8");

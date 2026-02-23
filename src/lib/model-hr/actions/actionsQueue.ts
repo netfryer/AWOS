@@ -1,9 +1,7 @@
 /**
  * HR Actions Queue: records recommended actions requiring approval.
- * Stored in .data/model-hr/actions.jsonl.
+ * File-backed (.data/model-hr/actions.jsonl) or DB-backed when PERSISTENCE_DRIVER=db.
  * Queue writes never throw - failures are swallowed to avoid breaking runs.
- * Retention: trims resolved actions older than MODEL_HR_ACTIONS_RETENTION_DAYS;
- * pending actions are always kept.
  */
 
 import { appendFile, readFile, mkdir, writeFile } from "fs/promises";
@@ -11,6 +9,13 @@ import { join } from "path";
 import { randomUUID } from "crypto";
 import { emitModelHrSignal } from "../signals/signalLog.js";
 import { getActionsRetentionDays } from "../config.js";
+import { getPersistenceDriver } from "../../persistence/driver.js";
+import {
+  enqueueActionDb,
+  listActionsDb,
+  getActionByIdDb,
+  updateActionDb,
+} from "./actionsQueueDb.js";
 
 export type HrActionType = "probation" | "disable" | "activate" | "kill_switch";
 export type HrActionRecommendedBy = "evaluation" | "ops";
@@ -90,6 +95,9 @@ export async function enqueueAction(
  * Trims resolved actions older than retention; pending actions always kept.
  */
 export async function listActions(limit: number = 100): Promise<HrAction[]> {
+  if (getPersistenceDriver() === "db") {
+    return listActionsDb(limit);
+  }
   try {
     const path = getActionsPath();
     const raw = await readFile(path, "utf-8");
@@ -125,6 +133,9 @@ export async function listActions(limit: number = 100): Promise<HrAction[]> {
  * Get a single action by id. Returns null if not found.
  */
 export async function getActionById(id: string): Promise<HrAction | null> {
+  if (getPersistenceDriver() === "db") {
+    return getActionByIdDb(id);
+  }
   const all = await listActions(5000);
   return all.find((a) => a.id === id) ?? null;
 }
@@ -137,6 +148,9 @@ async function updateAction(
   id: string,
   updater: (a: HrAction) => HrAction
 ): Promise<HrAction | null> {
+  if (getPersistenceDriver() === "db") {
+    return updateActionDb(id, updater);
+  }
   try {
     const path = getActionsPath();
     const raw = await readFile(path, "utf-8");

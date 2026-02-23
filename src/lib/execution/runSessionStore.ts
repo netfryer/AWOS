@@ -1,10 +1,17 @@
 /**
- * In-memory run session store for async execution progress.
+ * Run session store for async execution progress.
+ * In-memory when file driver; DB-backed when PERSISTENCE_DRIVER=db.
  */
 
 // ─── src/lib/execution/runSessionStore.ts ──────────────────────────────────
 
 import { randomUUID } from "crypto";
+import { getPersistenceDriver } from "../persistence/driver.js";
+import {
+  createRunSessionDb,
+  updateRunSessionDb,
+  getRunSessionDb,
+} from "./runSessionDb.js";
 
 export interface RunSessionProgress {
   totalPackages: number;
@@ -50,6 +57,15 @@ export function createRunSession(
     updatedAt: now,
   };
   getSessions().set(id, session);
+  if (getPersistenceDriver() === "db") {
+    void createRunSessionDb(
+      id,
+      session.status,
+      session.progress,
+      new Date(session.createdAt),
+      new Date(session.updatedAt)
+    );
+  }
   return id;
 }
 
@@ -68,6 +84,9 @@ export function updateRunSession(id: string, patch: Partial<Pick<RunSession, "st
     if (p.partialResult != null) s.progress.partialResult = p.partialResult;
   }
   s.updatedAt = new Date().toISOString();
+  if (getPersistenceDriver() === "db") {
+    void updateRunSessionDb(id, patch.status ?? undefined, patch.progress ?? undefined, new Date(s.updatedAt));
+  }
 }
 
 export function appendWarning(id: string, warning: string): void {
@@ -75,8 +94,21 @@ export function appendWarning(id: string, warning: string): void {
   if (!s) return;
   s.progress.warnings.push(warning);
   s.updatedAt = new Date().toISOString();
+  if (getPersistenceDriver() === "db") {
+    void updateRunSessionDb(id, undefined, { warnings: [warning] } as Partial<RunSessionProgress>, new Date(s.updatedAt));
+  }
 }
 
 export function getRunSession(id: string): RunSession | undefined {
   return getSessions().get(id);
+}
+
+/** Async getter: checks memory first, then DB when PERSISTENCE_DRIVER=db. */
+export async function getRunSessionAsync(id: string): Promise<RunSession | undefined> {
+  const mem = getSessions().get(id);
+  if (mem) return mem;
+  if (getPersistenceDriver() === "db") {
+    return getRunSessionDb(id);
+  }
+  return undefined;
 }

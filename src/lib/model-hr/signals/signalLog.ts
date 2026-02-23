@@ -1,13 +1,18 @@
 /**
- * File-backed Model HR signal log.
+ * Model HR signal log. File-backed or DB-backed when PERSISTENCE_DRIVER=db.
  * Emits MODEL_HR_SIGNAL when: probation, auto-disable, kill-switch.
  * Never throws - logging failures are swallowed to avoid run failures.
- * Retention: drops entries older than MODEL_HR_SIGNALS_RETENTION_DAYS on read.
  */
 
 import { appendFile, readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { getSignalsRetentionDays } from "../config.js";
+import { getPersistenceDriver } from "../../persistence/driver.js";
+import {
+  emitModelHrSignalDb,
+  readModelHrSignalsDb,
+  readModelHrSignalsForModelDb,
+} from "./signalLogDb.js";
 
 export interface ModelHrSignal {
   modelId: string;
@@ -42,6 +47,10 @@ function getRetentionCutoffISO(): string {
  */
 export function emitModelHrSignal(signal: Omit<ModelHrSignal, "tsISO">): void {
   const full: ModelHrSignal = { ...signal, tsISO: new Date().toISOString() };
+  if (getPersistenceDriver() === "db") {
+    void emitModelHrSignalDb(full);
+    return;
+  }
   const line = JSON.stringify(full) + "\n";
   ensureDir()
     .then(() => appendFile(getSignalsPath(), line, "utf-8"))
@@ -77,6 +86,9 @@ export function emitEscalationSignal(
  * Trims file to retention window when reading (prevents unbounded growth).
  */
 export async function readModelHrSignals(limit: number = 100): Promise<ModelHrSignal[]> {
+  if (getPersistenceDriver() === "db") {
+    return readModelHrSignalsDb(limit);
+  }
   try {
     const path = getSignalsPath();
     const raw = await readFile(path, "utf-8");
@@ -114,12 +126,14 @@ export async function readModelHrSignals(limit: number = 100): Promise<ModelHrSi
 
 /**
  * Read recent signals for a specific model. Returns [] on error or if file missing.
- * Reads a larger batch from the log and filters by modelId to ensure enough matches.
  */
 export async function readModelHrSignalsForModel(
   modelId: string,
   limit: number = 50
 ): Promise<ModelHrSignal[]> {
+  if (getPersistenceDriver() === "db") {
+    return readModelHrSignalsForModelDb(modelId, limit);
+  }
   try {
     const all = await readModelHrSignals(2000);
     const filtered = all.filter((s) => s.modelId === modelId).slice(0, limit);

@@ -1,27 +1,12 @@
 /**
- * In-memory TrustTracker for model reliability scoring.
- * Split worker vs QA trust; EMA-like updates; time-aware decay.
- * Integrates with Model HR Evaluation: records observations when trust is updated.
+ * DB-backed TrustTracker. Used when PERSISTENCE_DRIVER=db.
  */
 
-// ─── src/lib/governance/trustTracker.ts ─────────────────────────────────────
-
+import { eq } from "drizzle-orm";
+import { getDb } from "../db/index.js";
+import { trustTracker as trustTrackerTable } from "../db/schema.js";
 import { clamp01 } from "../schemas/governance.js";
-import { recordObservation, updatePriorsForObservation } from "../model-hr/index.js";
-import type { ModelObservation } from "../model-hr/index.js";
-
-/**
- * Records a ModelObservation to Model HR (append + update priors).
- * Must not throw; catches storage errors (e.g. missing data dir) and logs.
- */
-export async function recordObservationToModelHr(obs: ModelObservation): Promise<void> {
-  try {
-    await recordObservation(obs);
-    await updatePriorsForObservation(obs);
-  } catch (err) {
-    console.warn("[TrustTracker] Model HR observation recording failed:", err);
-  }
-}
+import type { TrustTracker, TrustByRole, TrustRole } from "./trustTracker.js";
 
 const DEFAULT_TRUST = 0.7;
 const EMA_ALPHA = 0.15;
@@ -33,47 +18,8 @@ const DECAY_GRACE_DAYS = 7;
 const DECAY_PER_DAY = 0.01;
 const TRUST_FLOOR = 0.35;
 
-export type TrustRole = "worker" | "qa";
-
-export interface TrustByRole {
-  worker: number;
-  qa: number;
-  lastUpdatedISO?: string;
-}
-
-export interface TrustTracker {
-  getTrust(modelId: string, role?: TrustRole): number;
-  getLastUpdatedISO(modelId: string): string | undefined;
-  updateTrust(
-    modelId: string,
-    predictedQuality: number,
-    actualQuality: number,
-    qaPass: boolean,
-    costVarianceRatio: number
-  ): number;
-  updateTrustWorker(
-    modelId: string,
-    predictedQuality: number,
-    actualQuality: number,
-    qaPass: boolean,
-    costVarianceRatio: number,
-    nowISO?: string
-  ): number;
-  updateTrustQa(modelId: string, agreedWithDeterministic: boolean, confidenceSignal?: number, nowISO?: string): number;
-  getTrustMap(): Record<string, number>;
-  getTrustRoleMap(): Record<string, TrustByRole>;
-}
-
-export class InMemoryTrustTracker implements TrustTracker {
+export class DbTrustTracker implements TrustTracker {
   private trust = new Map<string, TrustByRole>();
-
-  private getEntry(modelId: string): TrustByRole {
-    const e = this.trust.get(modelId);
-    if (e) return e;
-    const def: TrustByRole = { worker: DEFAULT_TRUST, qa: DEFAULT_TRUST };
-    this.trust.set(modelId, def);
-    return def;
-  }
 
   private applyDecay(raw: number, lastUpdatedISO: string | undefined): number {
     if (!lastUpdatedISO) return raw;
@@ -84,6 +30,51 @@ export class InMemoryTrustTracker implements TrustTracker {
     const extraDays = daysSince - DECAY_GRACE_DAYS;
     const decay = extraDays * DECAY_PER_DAY;
     return Math.max(TRUST_FLOOR, raw - decay);
+  }
+
+  private getEntry(modelId: string): TrustByRole {
+    const e = this.trust.get(modelId);
+    if (e) return e;
+    const def: TrustByRole = { worker: DEFAULT_TRUST, qa: DEFAULT_TRUST };
+    this.trust.set(modelId, def);
+    return def;
+  }
+
+  async loadFromDb(): Promise<void> {
+    const db = getDb();
+    const rows = await db.select().from(trustTrackerTable);
+    for (const r of rows) {
+      this.trust.set(r.modelId, {
+        worker: r.worker,
+        qa: r.qa,
+        lastUpdatedISO: r.lastUpdated.toISOString(),
+      });
+    }
+  }
+
+  private async persist(modelId: string, e: TrustByRole): Promise<void> {
+    try {
+      const db = getDb();
+      const now = new Date();
+      await db
+        .insert(trustTrackerTable)
+        .values({
+          modelId,
+          worker: e.worker,
+          qa: e.qa,
+          lastUpdated: now,
+        })
+        .onConflictDoUpdate({
+          target: trustTrackerTable.modelId,
+          set: {
+            worker: e.worker,
+            qa: e.qa,
+            lastUpdated: now,
+          },
+        });
+    } catch (err) {
+      console.warn("[TrustTracker] DB persist failed:", err instanceof Error ? err.message : err);
+    }
   }
 
   getTrust(modelId: string, role: TrustRole = "worker"): number {
@@ -132,10 +123,11 @@ export class InMemoryTrustTracker implements TrustTracker {
     const next = clamp01(current + EMA_ALPHA * delta);
     e.worker = next;
     e.lastUpdatedISO = iso;
+    void this.persist(modelId, e);
     return next;
   }
 
-  updateTrustQa(modelId: string, agreedWithDeterministic: boolean, confidenceSignal?: number, nowISO?: string): number {
+  updateTrustQa(modelId: string, agreedWithDeterministic: boolean, _confidenceSignal?: number, nowISO?: string): number {
     const e = this.getEntry(modelId);
     const current = e.qa;
     const iso = nowISO ?? new Date().toISOString();
@@ -143,6 +135,7 @@ export class InMemoryTrustTracker implements TrustTracker {
     const next = clamp01(current + QA_AGREEMENT_ALPHA * delta);
     e.qa = next;
     e.lastUpdatedISO = iso;
+    void this.persist(modelId, e);
     return next;
   }
 
@@ -164,30 +157,5 @@ export class InMemoryTrustTracker implements TrustTracker {
       };
     }
     return out;
-  }
-}
-
-export function trustWeightedScore(baseScore: number, trust: number): number {
-  return baseScore * (0.5 + 0.5 * trust);
-}
-
-import { getPersistenceDriver } from "../persistence/driver.js";
-import { DbTrustTracker } from "./trustTrackerDb.js";
-
-let trackerInstance: InMemoryTrustTracker | DbTrustTracker | null = null;
-
-export function getTrustTracker(): InMemoryTrustTracker | DbTrustTracker {
-  if (!trackerInstance) {
-    trackerInstance =
-      getPersistenceDriver() === "db" ? new DbTrustTracker() : new InMemoryTrustTracker();
-  }
-  return trackerInstance;
-}
-
-/** Load trust data from DB. Call at startup when PERSISTENCE_DRIVER=db. */
-export async function loadTrustTrackerFromDb(): Promise<void> {
-  const t = getTrustTracker();
-  if (t instanceof DbTrustTracker) {
-    await t.loadFromDb();
   }
 }

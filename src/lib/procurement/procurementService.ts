@@ -8,7 +8,9 @@ import type { TenantProcurementConfig, ProcurementFilterReason } from "./types.j
 import type { TenantConfigStorage } from "./tenantConfig/types.js";
 import type { CredentialsResolver } from "./providerCredentials/types.js";
 import { createFileTenantConfigStorage } from "./tenantConfig/fileTenantConfig.js";
+import { createDbTenantConfigStorage } from "./tenantConfig/dbTenantConfig.js";
 import { createEnvCredentialsResolver } from "./providerCredentials/envCredentials.js";
+import { getPersistenceDriver } from "../persistence/driver.js";
 
 const DEFAULT_TENANT = "default";
 
@@ -29,7 +31,8 @@ let defaultCredentials: CredentialsResolver | null = null;
 
 function getTenantStorage(): TenantConfigStorage {
   if (!defaultTenantStorage) {
-    defaultTenantStorage = createFileTenantConfigStorage();
+    defaultTenantStorage =
+      getPersistenceDriver() === "db" ? createDbTenantConfigStorage() : createFileTenantConfigStorage();
   }
   return defaultTenantStorage;
 }

@@ -1,8 +1,16 @@
 // ─── app/lib/demoRunsStore.ts ─────────────────────────────────────────────────
-// File-backed store for demo run responses: .data/demo-runs/<id>.json
+// File-backed or DB-backed store for demo run responses.
+// PERSISTENCE_DRIVER=db uses PostgreSQL; default is file (.data/demo-runs/<id>.json).
 
 import { mkdir, readdir, readFile, writeFile } from "fs/promises";
 import path from "path";
+import { getPersistenceDriver } from "../../src/lib/persistence/driver.js";
+import {
+  saveDemoRunDb,
+  loadDemoRunDb,
+  listDemoRunsDb,
+  listDemoRunsForRolesDb,
+} from "./demoRunsDb.js";
 
 /** Stored deliverable output keyed by package id (e.g. aggregation-report). */
 export interface DeliverableEntry {
@@ -91,6 +99,9 @@ export async function saveDemoRun(id: string, payload: DemoRunPayload): Promise<
 }
 
 export async function loadDemoRun(id: string): Promise<DemoRunPayload | null> {
+  if (getPersistenceDriver() === "db") {
+    return loadDemoRunDb(id);
+  }
   try {
     const filePath = getFilePath(id);
     const raw = await readFile(filePath, "utf-8");
@@ -162,6 +173,9 @@ export async function listDemoRunsForRoles(
   hours: number,
   limit: number
 ): Promise<DemoRunWithRoleExecutions[]> {
+  if (getPersistenceDriver() === "db") {
+    return listDemoRunsForRolesDb(hours, limit);
+  }
   try {
     const dir = getStoreDir();
     const entries = await readdir(dir, { withFileTypes: true });

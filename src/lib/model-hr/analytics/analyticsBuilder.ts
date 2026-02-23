@@ -1,7 +1,7 @@
 /**
  * Aggregated analytics for Model HR and routing quality.
- * Sources: registry-fallback, signals, observations, ledger (in-memory), models.
- * Caps observations at 5k. Handles missing files gracefully.
+ * Sources: registry-fallback, signals, observations, ledger, models.
+ * File-backed or DB-backed when PERSISTENCE_DRIVER=db.
  *
  * Canonical payload contract:
  *   registry: { health: "OK" | "FALLBACK", fallbackCount: number }
@@ -12,6 +12,9 @@ import { readFile, readdir } from "fs/promises";
 import { join } from "path";
 import type { ModelObservation } from "../types.js";
 import { getAnalyticsObservationCap } from "../config.js";
+import { getPersistenceDriver } from "../../persistence/driver.js";
+import { getRegistryFallbackCountLastHours } from "../registryHealth.js";
+import { makeRegistryService } from "../registry/index.js";
 
 const OBSERVATIONS_PER_MODEL = 100;
 
@@ -55,25 +58,7 @@ export interface ModelHrAnalytics {
 }
 
 async function getFallbackCount(hours: number): Promise<number> {
-  try {
-    const path = join(getDataDir(), "registry-fallback.jsonl");
-    const raw = await readFile(path, "utf-8");
-    const lines = raw.trim().split("\n").filter(Boolean);
-    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
-    let count = 0;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      try {
-        const obj = JSON.parse(lines[i]) as { tsISO?: string };
-        if (obj?.tsISO && obj.tsISO >= cutoff) count++;
-        else if (obj?.tsISO && obj.tsISO < cutoff) break;
-      } catch {
-        /* skip */
-      }
-    }
-    return count;
-  } catch {
-    return 0;
-  }
+  return getRegistryFallbackCountLastHours(hours);
 }
 
 async function loadObservationsBounded(hours: number): Promise<ModelObservation[]> {
@@ -105,12 +90,27 @@ async function loadObservationsBounded(hours: number): Promise<ModelObservation[
 }
 
 async function loadModelsCounts(): Promise<{ active: number; probation: number; deprecated: number; disabled: number }> {
+  const counts = { active: 0, probation: 0, deprecated: 0, disabled: 0 };
+  if (getPersistenceDriver() === "db") {
+    try {
+      const models = await makeRegistryService().listModels({});
+      for (const m of models) {
+        const status = m.identity?.status;
+        if (status === "active") counts.active++;
+        else if (status === "probation") counts.probation++;
+        else if (status === "deprecated") counts.deprecated++;
+        else if (status === "disabled") counts.disabled++;
+      }
+      return counts;
+    } catch {
+      return counts;
+    }
+  }
   try {
     const path = join(getDataDir(), "models.json");
     const raw = await readFile(path, "utf-8");
     const parsed = JSON.parse(raw) as unknown;
     const arr = Array.isArray(parsed) ? parsed : [];
-    const counts = { active: 0, probation: 0, deprecated: 0, disabled: 0 };
     for (const m of arr) {
       const status = (m as { identity?: { status?: string } })?.identity?.status;
       if (status === "active") counts.active++;
@@ -120,7 +120,7 @@ async function loadModelsCounts(): Promise<{ active: number; probation: number; 
     }
     return counts;
   } catch {
-    return { active: 0, probation: 0, deprecated: 0, disabled: 0 };
+    return counts;
   }
 }
 
@@ -136,7 +136,10 @@ function percentile(sorted: number[], p: number): number {
 
 export async function buildModelHrAnalytics(
   windowHours: number,
-  ledgerStore?: { listLedgers: () => Array<{ runSessionId: string; startedAtISO: string }>; getLedger: (id: string) => { decisions: Array<{ type: string; details?: Record<string, unknown> }> } | undefined }
+  ledgerStore?: {
+    listLedgers: () => Array<{ runSessionId: string; startedAtISO: string }> | Promise<Array<{ runSessionId: string; startedAtISO: string }>>;
+    getLedger: (id: string) => { decisions: Array<{ type: string; details?: Record<string, unknown> }> } | undefined | Promise<{ decisions: Array<{ type: string; details?: Record<string, unknown> }> } | undefined>;
+  }
 ): Promise<ModelHrAnalytics> {
   const fallbackCount = await getFallbackCount(windowHours);
   const observations = await loadObservationsBounded(windowHours);
@@ -183,10 +186,10 @@ export async function buildModelHrAnalytics(
   const cutoff = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
 
   if (ledgerStore) {
-    const ledgers = ledgerStore.listLedgers();
+    const ledgers = await Promise.resolve(ledgerStore.listLedgers());
     for (const item of ledgers) {
       if (item.startedAtISO < cutoff) continue;
-      const ledger = ledgerStore.getLedger(item.runSessionId);
+      const ledger = await Promise.resolve(ledgerStore.getLedger(item.runSessionId));
       if (!ledger) continue;
       for (const d of ledger.decisions) {
         if (d.type === "ROUTE") {
